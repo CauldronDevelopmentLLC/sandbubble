@@ -1,0 +1,67 @@
+common:
+  - args: [--clearenv, --unshare-pid, --die-with-parent, --proc, /proc,
+      --dev, /dev, --tmpfs, /tmp]
+  - restrict-tty:
+  - setenv: {PATH: /usr/bin:/bin}
+  - setenv: [LANG, XDG_RUNTIME_DIR, XDG_SESSION_TYPE, TERM, HOME, LOGNAME, USER]
+  - bind: /etc
+  - bind: /usr
+  - bind: /lib
+  - bind: /lib64
+  - symlink: [usr/bin, /bin]
+  - symlink: [usr/bin, /sbin]
+  - args: [--tmpfs, '{env[XDG_RUNTIME_DIR]}']
+  - bind: {path: /run/systemd/resolve, try: true}
+
+private-home:
+  - bind:
+      path: '{env[HOME]}/sandboxes/{name}/'
+      dst: '{env[HOME]}'
+      read-write: true
+      create: skel
+  - dir: '{env[HOME]}/.config'
+  - dir: '{env[HOME]}/.cache'
+  - dir: '{env[HOME]}/.local/share'
+
+x11:
+  - setenv: [DISPLAY]
+  - bind: /tmp/.X11-unix/
+
+pulseaudio:
+  - bind: '{env[XDG_RUNTIME_DIR]}/pulse/native'
+  - bind: {path: '{env[HOME]}/.config/pulse/cookie', try: true}
+  - bind: {path: '{env[XDG_RUNTIME_DIR]}/pipewire-0', try: true}
+
+dri:
+  - bind: {path: /dev/dri, dev: true}
+  - bind: /sys
+
+portal:
+  - file: ['', '{env[XDG_RUNTIME_DIR]}/flatpak-info']
+  - file: ['', '/.flatpak-info']
+  - dbus: {allow: call, path: 'org.freedesktop.portal.*=*'}
+  - dbus:
+      allow: broadcast
+      path: 'org.freedesktop.portal.*=@/org/freedesktop/portal/*'
+
+firefox:
+  - setenv: {MOZ_ENABLE_WAYLAND: 1}
+  - use: [common, private-home, wayland, portal]
+  - dbus: {allow: own, path: org.mozilla.firefox.*}
+  - bind: {path: '{env[HOME]}/Downloads', read-write: true}
+  - bind: {path: '{env[HOME]}/.config/mozilla', dst: '{env[HOME]}/.mozilla'}
+
+shell:
+  - use: [common, private-home]
+
+node:
+  - use: [common, private-home]
+  - bind: {cwd: true, read-write: true}
+  - cwd: true
+
+accessibility:
+  - dbus: {allow: call, path: 'org.a11y.Bus.*=*'}
+  - bind: {path: '{env[XDG_RUNTIME_DIR]}/at-spi', try: true}
+
+default:
+  - use: [common, private-home, x11, pulseaudio, portal, accessibility]

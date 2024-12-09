@@ -1,0 +1,250 @@
+#!/usr/bin/env python3
+
+import argparse
+import os
+import sys
+import tempfile
+import yaml
+import shlex
+
+
+class Sandbubble:
+  def __init__(self, args):
+    self.args = args
+    self.system_bus_args  = set()
+    self.session_bus_args = set()
+    self.rules = yaml.full_load(open(os.path.expanduser(args.config)))
+
+    self.env = {**os.environ}
+    self.vars = dict(
+      env        = self.env,
+      name       = self.args.name,
+      command    = self.args.command,
+      executable = args.command[0].split('/')[-1],
+      pid        = os.getpid())
+
+
+  def expand(self, s): return str(s).format(**self.vars)
+
+
+  def setup(self, setup):
+    setup_args = []
+
+    if isinstance(setup, list):
+      for item in setup:
+        setup_args.extend(self.setup(item))
+
+      return setup_args
+
+    setup = setup.copy()
+
+    for action, value in setup.items():
+      method = getattr(self, 'action_' + action.replace('-', '_'), None)
+
+      if method is None:
+        print('unknown action: %s' % action)
+        sys.exit(1)
+
+      args = method(value)
+      if args is not None: setup_args.extend(args)
+
+    return setup_args
+
+
+  def action_use(self, params):
+    args = []
+    for rule in params: args.extend(self.setup(self.rules[rule]))
+    return args
+
+
+  def action_args(self, params): return [self.expand(a) for a in params]
+
+
+  def action_setenv(self, params):
+    args = []
+
+    if isinstance(params, dict):
+      for k, v in params.items():
+        self.env[k] = self.expand(v)
+        args.extend(('--setenv', k, self.env[k]))
+
+    elif isinstance(params, list):
+      for k in params:
+        if k in os.environ:
+          args.extend(('--setenv', k, os.environ[k]))
+
+    return args
+
+
+  def action_bind(self, params):
+    if isinstance(params, str): params = {'path': params}
+
+    src = os.getcwd() if params.get('cwd', False) else params['path']
+    dst = params.get('dst', src)
+    src = self.expand(src)
+    dst = self.expand(dst)
+
+    create = params.get('create', False)
+    if create and not os.path.exists(src):
+      os.makedirs(src)
+
+      if create == 'skel':
+        from distutils.dir_util import copy_tree
+        copy_tree('/etc/skel', src)
+
+        bashrc = src + '/.bashrc'
+        if os.path.exists(src):
+          with open(bashrc, 'a') as f:
+            f.write('\nPS1="(%s) $PS1"\n' % self.args.name)
+
+    if params.get('dev', False): type = 'dev-bind'
+    else: type = 'bind' if params.get('read-write', False) else 'ro-bind'
+    if params.get('try', False): type += '-try'
+
+    return ('--' + type, src, dst)
+
+
+  def action_dbus(self, params):
+    is_system = params.get('system', False)
+    bus_args = self.system_bus_args if is_system else self.session_bus_args
+
+    allow = params.get('allow', [])
+    if not isinstance(allow, list): allow = [allow]
+
+    for type in allow:
+      assert type in ('see', 'talk', 'own', 'call', 'broadcast')
+      bus_args.add('--%s=%s' % (type, params['path']))
+
+
+  def action_file(self, params):
+    data, dst = params
+    pr, pw = os.pipe2(0)
+
+    if os.fork() == 0:
+      os.close(pr)
+      os.write(pw, data.encode())
+      sys.exit(0)
+
+    else:
+      os.close(pw)
+      return ('--file', str(pr), self.expand(dst))
+
+
+  def action_dir(self, params): return ('--dir', self.expand(params))
+
+
+  def action_symlink(self, params):
+    if isinstance(params, str): params = [params, params]
+    return ('--symlink', self.expand(params[0]), self.expand(params[1]))
+
+
+  def action_cwd(self, params):
+    if type(params) == 'str': return ('--chdir', self.expand(params))
+    if params: return ('--chdir', os.getcwd())
+
+
+  def action_restrict_tty(self, params):
+    # --new-session breaks interactive sessions, this is an alternative way of
+    # fixing CVE-2017-5226
+    import seccomp
+    import termios
+    f = seccomp.SyscallFilter(defaction = seccomp.ALLOW)
+    f.add_rule(seccomp.KILL_PROCESS, 'ioctl',
+               seccomp.Arg(1, seccomp.MASKED_EQ, 0xffffffff, termios.TIOCSTI))
+    f.add_rule(seccomp.KILL_PROCESS, 'ioctl',
+               seccomp.Arg(1, seccomp.MASKED_EQ, 0xffffffff, termios.TIOCLINUX))
+    f.load()
+
+
+  def setup_dbus_proxy(self):
+    if not (self.session_bus_args or self.system_bus_args): return []
+
+    cmd_args = []
+    args     = []
+    dir      = f'{os.environ['XDG_RUNTIME_DIR']}/xdg-dbus-proxy'
+
+    os.makedirs(dir, exist_ok = True)
+
+    if self.session_bus_args:
+      socket   = tempfile.mktemp(prefix = 'session-', dir = dir)
+      bus_addr = os.environ['DBUS_SESSION_BUS_ADDRESS']
+      args.extend([bus_addr, socket, '--filter'] + list(self.session_bus_args))
+      cmd_args.extend((
+        '--bind', socket, bus_addr.removeprefix('unix:path='),
+        '--setenv', 'DBUS_SESSION_BUS_ADDRESS', bus_addr))
+
+    if self.system_bus_args:
+      socket = tempfile.mktemp(prefix = 'system-', dir = dir)
+      path   = '/run/dbus/system_bus_socket'
+      args.extend([path, socket, '--filter'] + list(self.system_bus_args))
+      cmd_args.extend(('--bind', path, path))
+
+    # Start dbus proxy
+    pr, pw = os.pipe2(0)
+
+    if os.fork() == 0:
+      os.close(pr)
+      cmd = ['xdg-dbus-proxy', '--fd=%d' % pw] + args
+      os.execlp(cmd[0], *cmd)
+
+    os.close(pw)
+    assert os.read(pr, 1) == b'x' # wait for xdg-dbus-proxy to be ready
+    cmd_args.extend(('--sync-fd', str(pr)))
+
+    return cmd_args
+
+
+  def exec(self):
+    cmd = ['bwrap']
+
+    for rule in self.args.rule or ['default']:
+      cmd.extend(self.setup(self.rules[rule]))
+
+    for i in range(len(bwrap_args)):
+      for a in bwrap_args[i]:
+        value = getattr(self.args, a.replace('-', '_'))
+
+        if value:
+          if i == 0: cmd.append('--' + a)
+          else:
+            for v in value: cmd.extend(['--' + a] + v)
+
+    cmd.extend(self.setup_dbus_proxy())
+    cmd.extend(self.args.command)
+
+    if self.args.verbose: print('@' + shlex.join(cmd), file = sys.stderr)
+    os.execvp(cmd[0], cmd)
+
+
+# Arguments
+parser = argparse.ArgumentParser()
+bwrap_args = ((
+  'unshare-all', 'share-net', 'unshare-user', 'unshare-user-try', 'unshare-ipc',
+  'unshare-net', 'unshare-uts', 'unshare-cgroup', 'unshare-cgroup-try',
+  'clearenv', 'new-session', 'die-with-parent', 'as-pid-1'), (
+  'args', 'userns', 'userns2', 'pidns', 'uid', 'gid', 'hostname', 'chdir',
+  'unsetenv', 'lock-file', 'sync-fd', 'remount-ro', 'exec-label', 'file-label',
+  'proc', 'dev', 'tmpfs', 'mqueue', 'dir', 'seccomp', 'add-seccomp-fd',
+  'block-fd', 'userns-block-fd', 'json-status-fd', 'cap-add', 'cap-drop',
+  'perms'), (
+  'setenv', 'bind', 'bind-try', 'dev-bind', 'dev-bind-try', 'ro-bind',
+  'ro-bind-try', 'file', 'bind-data', 'ro-bind-data', 'symlink', 'chmod'))
+
+for i in range(len(bwrap_args)):
+  for a in bwrap_args[i]:
+    if i: parser.add_argument('--' + a, nargs = i, action = 'append')
+    else: parser.add_argument('--' + a, action = 'store_true')
+
+parser.add_argument(
+  '--config', '-c', default = '~/.config/sandbubble.yml',
+  help = 'Path to config file')
+parser.add_argument(
+  '--rule', '-r', action = 'append', help = 'Rule or rules to apply')
+parser.add_argument(
+  '--verbose', '-v', action = 'store_true', help = 'Verbose logging')
+parser.add_argument('name', help = 'Name of the sandbox')
+parser.add_argument('command', nargs = '+')
+args = parser.parse_args()
+
+
+Sandbubble(args).exec()
