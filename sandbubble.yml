@@ -1,67 +1,81 @@
-common:
-  - args: [--clearenv, --unshare-pid, --die-with-parent, --proc, /proc,
-      --dev, /dev, --tmpfs, /tmp]
-  - restrict-tty:
-  - setenv: {PATH: /usr/bin:/bin}
-  - setenv: [LANG, XDG_RUNTIME_DIR, XDG_SESSION_TYPE, TERM, HOME, LOGNAME, USER]
-  - bind: /etc
-  - bind: /usr
-  - bind: /lib
-  - bind: /lib64
-  - symlink: [usr/bin, /bin]
-  - symlink: [usr/bin, /sbin]
-  - args: [--tmpfs, '{env[XDG_RUNTIME_DIR]}']
-  - bind: {path: /run/systemd/resolve, try: true}
+rules:
+  common:
+    - args: [--clearenv, --unshare-pid, --die-with-parent, --proc, /proc,
+        --dev, /dev, --tmpfs, /tmp]
+    - restrict-tty:
+    - setenv: {PATH: /usr/bin:/bin}
+    - setenv: [LANG, XDG_RUNTIME_DIR, XDG_SESSION_TYPE, TERM, HOME, LOGNAME, USER]
+    - bind: /etc
+    - bind: /usr
+    - bind: /lib
+    - bind: /lib64
+    - symlink: [usr/bin, /bin]
+    - symlink: [usr/bin, /sbin]
+    - args: [--tmpfs, '{env[XDG_RUNTIME_DIR]}']
+    - bind: {path: /run/systemd/resolve, try: true}
 
-private-home:
-  - bind:
-      path: '{env[HOME]}/sandboxes/{name}/'
-      dst: '{env[HOME]}'
-      read-write: true
-      create: skel
-  - dir: '{env[HOME]}/.config'
-  - dir: '{env[HOME]}/.cache'
-  - dir: '{env[HOME]}/.local/share'
+  private-home:
+    - bind:
+        path: '{env[HOME]}/sandboxes/{name}/'
+        dst: '{env[HOME]}'
+        read-write: true
+        create: skel
+    - dir: '{env[HOME]}/.config'
+    - dir: '{env[HOME]}/.cache'
+    - dir: '{env[HOME]}/.local/share'
 
-x11:
-  - setenv: [DISPLAY]
-  - bind: /tmp/.X11-unix/
+  x11:
+    - setenv: [DISPLAY]
+    - bind: /tmp/.X11-unix/
 
-pulseaudio:
-  - bind: '{env[XDG_RUNTIME_DIR]}/pulse/native'
-  - bind: {path: '{env[HOME]}/.config/pulse/cookie', try: true}
-  - bind: {path: '{env[XDG_RUNTIME_DIR]}/pipewire-0', try: true}
+  pulseaudio:
+    - bind: '{env[XDG_RUNTIME_DIR]}/pulse/native'
+    - bind: {path: '{env[HOME]}/.config/pulse/cookie', try: true}
+    - bind: {path: '{env[XDG_RUNTIME_DIR]}/pipewire-0', try: true}
 
-dri:
-  - bind: {path: /dev/dri, dev: true}
-  - bind: /sys
+  nvidia:
+    - bind: {path: /dev/nvidiactl, dev: true}
+    - bind: {path: /dev/nvidia-uvm, dev: true}
+    - bind: {path: /dev/nvidia-uvm-tools, dev: true}
+    - bind: {path: /dev/nvidia-modeset, dev: true}
+    - bind: {path: /dev/nvidia0, dev: true, try: true}
+    - bind: {path: /dev/nvidia1, dev: true, try: true}
 
-portal:
-  - file: ['', '{env[XDG_RUNTIME_DIR]}/flatpak-info']
-  - file: ['', '/.flatpak-info']
-  - dbus: {allow: call, path: 'org.freedesktop.portal.*=*'}
-  - dbus:
-      allow: broadcast
-      path: 'org.freedesktop.portal.*=@/org/freedesktop/portal/*'
+  gpu:
+    - use: [nvidia]
+    - bind: {path: /dev/dri, dev: true}
+    - bind: /sys
 
-firefox:
-  - setenv: {MOZ_ENABLE_WAYLAND: 1}
-  - use: [common, private-home, wayland, portal]
-  - dbus: {allow: own, path: org.mozilla.firefox.*}
-  - bind: {path: '{env[HOME]}/Downloads', read-write: true}
-  - bind: {path: '{env[HOME]}/.config/mozilla', dst: '{env[HOME]}/.mozilla'}
+  portal:
+    - file: ['', '{env[XDG_RUNTIME_DIR]}/flatpak-info']
+    - file: ['', '/.flatpak-info']
+    - dbus: {allow: call, path: 'org.freedesktop.portal.*=*'}
+    - dbus:
+        allow: broadcast
+        path: 'org.freedesktop.portal.*=@/org/freedesktop/portal/*'
 
-shell:
-  - use: [common, private-home]
+  firefox:
+    - setenv: {MOZ_ENABLE_WAYLAND: 1}
+    - use: [common, private-home, wayland, portal]
+    - dbus: {allow: own, path: org.mozilla.firefox.*}
+    - bind: {path: '{env[HOME]}/Downloads', read-write: true}
+    - bind: {path: '{env[HOME]}/.config/mozilla', dst: '{env[HOME]}/.mozilla'}
 
-node:
-  - use: [common, private-home]
-  - bind: {cwd: true, read-write: true}
-  - cwd: true
+  gthumb:
+    - dbus: {allow: own, path: org.gnome.gThumb.*}
 
-accessibility:
-  - dbus: {allow: call, path: 'org.a11y.Bus.*=*'}
-  - bind: {path: '{env[XDG_RUNTIME_DIR]}/at-spi', try: true}
+  shell:
+    - use: [common, private-home]
 
-default:
-  - use: [common, private-home, x11, pulseaudio, portal, accessibility]
+  node:
+    - use: [common, private-home]
+    - bind: {cwd: true, read-write: true}
+    - cwd: true
+
+  accessibility:
+    - dbus: {allow: call, path: 'org.a11y.Bus.*=*'}
+    - bind: {path: '{env[XDG_RUNTIME_DIR]}/at-spi', try: true}
+
+defaults:
+  use: [common, private-home, x11, pulseaudio, portal, accessibility]
+  command: [bash]

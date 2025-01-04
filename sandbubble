@@ -8,55 +8,78 @@ import yaml
 import shlex
 
 
+class Dumper(yaml.Dumper):
+  def increase_indent(self, flow = False, indentless = False):
+    return super().increase_indent(flow, False)
+
+
 class Sandbubble:
   def __init__(self, args):
-    self.args = args
+    self.args             = args
     self.system_bus_args  = set()
     self.session_bus_args = set()
-    self.rules = yaml.full_load(open(os.path.expanduser(args.config)))
-
-    self.env = {**os.environ}
-    self.vars = dict(
+    self.applied          = []
+    self.env              = {**os.environ}
+    self.vars             = dict(
       env        = self.env,
       name       = self.args.name,
-      command    = self.args.command,
-      executable = args.command[0].split('/')[-1],
       pid        = os.getpid())
+
+
+  def get_default(self, name, default):
+    return self.config['defaults'].get(name, default)
+
+
+  def load_config(self, path):
+    if self.args.verbose:
+      print('Loading config', path)
+
+    with open(os.path.expanduser(path)) as f:
+      self.config = yaml.full_load(f)
+      if not 'defaults' in self.config: self.config['defaults'] = {}
 
 
   def expand(self, s): return str(s).format(**self.vars)
 
 
-  def setup(self, setup):
-    setup_args = []
-
-    if isinstance(setup, list):
-      for item in setup:
-        setup_args.extend(self.setup(item))
-
-      return setup_args
-
-    setup = setup.copy()
-
-    for action, value in setup.items():
-      method = getattr(self, 'action_' + action.replace('-', '_'), None)
-
-      if method is None:
-        print('unknown action: %s' % action)
-        sys.exit(1)
-
-      args = method(value)
-      if args is not None: setup_args.extend(args)
-
-    return setup_args
-
-
-  def action_use(self, params):
+  def apply_rule(self, rule):
     args = []
-    for rule in params: args.extend(self.setup(self.rules[rule]))
+
+    if isinstance(rule, list):
+      for r in rule:
+        args.extend(self.apply_rule(r))
+      return args
+
+    # Only apply each rule once
+    if rule in self.applied: return []
+    self.applied.append(rule)
+
+    if self.args.verbose:
+      print('Applying rule', rule)
+
+    for action in self.config['rules'][rule]:
+      args.extend(self.apply_action(action))
+
     return args
 
 
+  def apply_action(self, action):
+    args = []
+
+    for name, value in action.items():
+      method = getattr(self, 'action_' + name.replace('-', '_'), None)
+
+      if method is None:
+        print('unknown action: %s' % name)
+        sys.exit(1)
+
+      _args = method(value)
+      if _args is not None: args.extend(_args)
+
+    return args
+
+
+  def action_use(self, params): return self.apply_rule(params)
   def action_args(self, params): return [self.expand(a) for a in params]
 
 
@@ -194,24 +217,56 @@ class Sandbubble:
     return cmd_args
 
 
-  def exec(self):
-    cmd = ['bwrap']
-
-    for rule in self.args.rule or ['default']:
-      cmd.extend(self.setup(self.rules[rule]))
+  def get_extra_args(self):
+    args = list(self.get_default('args', []))
 
     for i in range(len(bwrap_args)):
       for a in bwrap_args[i]:
         value = getattr(self.args, a.replace('-', '_'))
 
         if value:
-          if i == 0: cmd.append('--' + a)
+          if i == 0: args.append('--' + a)
           else:
-            for v in value: cmd.extend(['--' + a] + v)
+            for v in value: args.extend(['--' + a] + v)
 
+    return args
+
+
+  def exec(self):
+    # Load config
+    config_dir = os.path.expanduser('~/sandboxes/%s/.config' % self.args.name)
+    config = config_dir + '/sandbubble.yml'
+    if os.path.exists(config): self.load_config(config)
+    else: self.load_config(self.args.config)
+
+    # Command
+    command = self.args.command or self.get_default('command', ['bash'])
+    self.vars['command']    = shlex.join(command)
+    self.vars['executable'] = command[0]
+
+    # Apply rules
+    rules = self.get_default('use', []) if not self.args.no_default else []
+    rules += self.args.rule or []
+    cmd = ['bwrap']
+    cmd.extend(self.apply_rule(rules))
+    extra_args = self.get_extra_args()
+    cmd.extend(extra_args)
     cmd.extend(self.setup_dbus_proxy())
-    cmd.extend(self.args.command)
+    cmd.extend(command)
 
+    # Save local config
+    if not os.path.exists(config):
+      self.config['defaults']['use']     = self.applied
+      self.config['defaults']['command'] = command
+      self.config['defaults']['args']    = extra_args
+
+      os.makedirs(config_dir, exist_ok = True)
+      with open(config, 'w') as f:
+        yaml.dump(
+          self.config, f, Dumper = Dumper, width = 80, sort_keys = False,
+          default_flow_style = False)
+
+    # Execute
     if self.args.verbose: print('@' + shlex.join(cmd), file = sys.stderr)
     os.execvp(cmd[0], cmd)
 
@@ -237,13 +292,15 @@ for i in range(len(bwrap_args)):
 
 parser.add_argument(
   '--config', '-c', default = '~/.config/sandbubble.yml',
-  help = 'Path to config file')
+  help = 'Path to default config file')
+parser.add_argument(
+  '--no-default', action = 'store_true', help = 'Disable default rules')
 parser.add_argument(
   '--rule', '-r', action = 'append', help = 'Rule or rules to apply')
 parser.add_argument(
   '--verbose', '-v', action = 'store_true', help = 'Verbose logging')
 parser.add_argument('name', help = 'Name of the sandbox')
-parser.add_argument('command', nargs = '+')
+parser.add_argument('command', nargs = '*')
 args = parser.parse_args()
 
 

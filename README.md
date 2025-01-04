@@ -8,3 +8,11 @@ The
 was developed by Simon Lipp.  See
 [Simon's blog post](https://sloonz.github.io/posts/sandboxing-3/) for more
 information.
+
+# Usage
+
+Copy ``sandbubble.yml`` to ``~/.config`` and edit to suit your needs.
+
+Sandbox an application as follows:
+
+    sandbubble -p common -p private-home -- <executable> <args>
