@@ -47,8 +47,6 @@ To see the command line options run:
 
     sandbubble --help
 
-Many of these options can be expressed more simply via the configuration file.
-
 # Configuration
 
 Sandbubble uses a [YAML](https://yaml.org/) configuration file.  There are two top level keys ``rules`` and ``defaults``.
@@ -224,7 +222,7 @@ rules:
 
 The ``defaults`` section contains default options.  When a sandbox is created
 the ``defaults`` section is created in it's own ``sandbubble.yml`` file
-recording the command run, any extra arguments and which rules were used.
+recording the command run and which rules were used.
 
 ```yaml
 defaults:
@@ -237,6 +235,3 @@ A list of rules to apply.
 
 ### ``command: [<command>, <arg1>, ...]``
 The command to run.
-
-### ``args: [<arg1>, <arg2>, ...]``
-A list of additional argument to pass to ``bwrap``.

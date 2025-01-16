@@ -218,21 +218,6 @@ class Sandbubble:
     return cmd_args
 
 
-  def get_extra_args(self):
-    args = list(self.get_default('args', []))
-
-    for i in range(len(bwrap_args)):
-      for a in bwrap_args[i]:
-        value = getattr(self.args, a.replace('-', '_'))
-
-        if value:
-          if i == 0: args.append('--' + a)
-          else:
-            for v in value: args.extend(['--' + a] + v)
-
-    return args
-
-
   def exec(self):
     # Load config
     config_dir = os.path.expanduser('~/sandboxes/%s/.config' % self.args.name)
@@ -250,21 +235,20 @@ class Sandbubble:
     rules += self.args.rule or []
     cmd = ['bwrap']
     cmd.extend(self.apply_rule(rules))
-    extra_args = self.get_extra_args()
-    cmd.extend(extra_args)
     cmd.extend(self.setup_dbus_proxy())
     cmd.extend(command)
 
     # Save local config
     if not os.path.exists(config):
-      self.config['defaults']['use']     = self.applied
-      self.config['defaults']['command'] = command
-      self.config['defaults']['args']    = extra_args
+      config_data = dict(
+        defaults = dict(use = self.applied, command = command),
+        rules = {n: v for n, v in self.config['rules'].items()
+                 if n in self.applied})
 
       os.makedirs(config_dir, exist_ok = True)
       with open(config, 'w') as f:
         yaml.dump(
-          self.config, f, Dumper = Dumper, width = 80, sort_keys = False,
+          config_data, f, Dumper = Dumper, width = 80, sort_keys = False,
           default_flow_style = False)
 
     # Execute
@@ -274,23 +258,6 @@ class Sandbubble:
 
 # Arguments
 parser = argparse.ArgumentParser()
-bwrap_args = ((
-  'unshare-all', 'share-net', 'unshare-user', 'unshare-user-try', 'unshare-ipc',
-  'unshare-net', 'unshare-uts', 'unshare-cgroup', 'unshare-cgroup-try',
-  'clearenv', 'new-session', 'die-with-parent', 'as-pid-1'), (
-  'args', 'userns', 'userns2', 'pidns', 'uid', 'gid', 'hostname', 'chdir',
-  'unsetenv', 'lock-file', 'sync-fd', 'remount-ro', 'exec-label', 'file-label',
-  'proc', 'dev', 'tmpfs', 'mqueue', 'dir', 'seccomp', 'add-seccomp-fd',
-  'block-fd', 'userns-block-fd', 'json-status-fd', 'cap-add', 'cap-drop',
-  'perms'), (
-  'setenv', 'bind', 'bind-try', 'dev-bind', 'dev-bind-try', 'ro-bind',
-  'ro-bind-try', 'file', 'bind-data', 'ro-bind-data', 'symlink', 'chmod'))
-
-for i in range(len(bwrap_args)):
-  for a in bwrap_args[i]:
-    if i: parser.add_argument('--' + a, nargs = i, action = 'append')
-    else: parser.add_argument('--' + a, action = 'store_true')
-
 parser.add_argument(
   '--config', '-c', default = '~/.config/sandbubble.yml',
   help = 'Path to default config file')
