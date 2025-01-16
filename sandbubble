@@ -83,7 +83,7 @@ class Sandbubble:
   def action_args(self, params): return [self.expand(a) for a in params]
 
 
-  def action_setenv(self, params):
+  def action_env(self, params):
     args = []
 
     if isinstance(params, dict):
@@ -161,9 +161,10 @@ class Sandbubble:
     return ('--symlink', self.expand(params[0]), self.expand(params[1]))
 
 
-  def action_cwd(self, params):
-    if type(params) == 'str': return ('--chdir', self.expand(params))
-    if params: return ('--chdir', os.getcwd())
+  def action_chdir(self, params):
+    if type(params) != 'str':
+      raise Exception('"chdir" must have string parameter')
+    return ('--chdir', self.expand(params))
 
 
   def action_restrict_tty(self, params):

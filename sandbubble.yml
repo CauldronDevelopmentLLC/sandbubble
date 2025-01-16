@@ -3,8 +3,8 @@ rules:
     - args: [--clearenv, --unshare-pid, --die-with-parent, --proc, /proc,
         --dev, /dev, --tmpfs, /tmp]
     - restrict-tty:
-    - setenv: {PATH: /usr/bin:/bin}
-    - setenv: [LANG, XDG_RUNTIME_DIR, XDG_SESSION_TYPE, TERM, HOME, LOGNAME, USER]
+    - env: {PATH: /usr/bin:/bin}
+    - env: [LANG, XDG_RUNTIME_DIR, XDG_SESSION_TYPE, TERM, HOME, LOGNAME, USER]
     - bind: /etc
     - bind: /usr
     - bind: /lib
@@ -25,7 +25,7 @@ rules:
     - dir: '{env[HOME]}/.local/share'
 
   x11:
-    - setenv: [DISPLAY]
+    - env: [DISPLAY]
     - bind: /tmp/.X11-unix/
 
   pulseaudio:
@@ -55,7 +55,7 @@ rules:
         path: 'org.freedesktop.portal.*=@/org/freedesktop/portal/*'
 
   firefox:
-    - setenv: {MOZ_ENABLE_WAYLAND: 1}
+    - env: {MOZ_ENABLE_WAYLAND: 1}
     - use: [common, private-home, wayland, portal]
     - dbus: {allow: own, path: org.mozilla.firefox.*}
     - bind: {path: '{env[HOME]}/Downloads', read-write: true}
@@ -70,7 +70,6 @@ rules:
   node:
     - use: [common, private-home]
     - bind: {cwd: true, read-write: true}
-    - cwd: true
 
   accessibility:
     - dbus: {allow: call, path: 'org.a11y.Bus.*=*'}
