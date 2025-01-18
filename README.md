@@ -1,7 +1,6 @@
-# sandbubble
-Simplifies the use of [bubblewrap](https://github.com/containers/bubblewrap)
-and [xdg-dbus-proxy](https://github.com/flatpak/xdg-dbus-proxy) to sandbox
-applications in Linux.
+# Sandbubble
+
+A tool for easily sandboxing applications in Linux.
 
 Linux is generally considered a secure operating system.  However, when you
 run a program that program is by default given the same access as your user.
@@ -15,67 +14,88 @@ sources and run them with full access to all your personal files, that's
 another story.  Sandbubble aims to solve this problem by making it easier to
 sandbox applications and give them only the access they require to operate.
 
-Based on
+Sandbubble uses [bubblewrap](https://github.com/containers/bubblewrap)
+and [xdg-dbus-proxy](https://github.com/flatpak/xdg-dbus-proxy) to sandbox
+applications in Linux.  Based on
 [code by Simon Lipp](https://gist.github.com/sloonz/4b7f5f575a96b6fe338534dbc2480a5d).  See
 [Simon's blog post](https://sloonz.github.io/posts/sandboxing-3/) for more
 information.
 
 # Quickstart
 
-Copy ``sandbubble.yml`` to ``~/.config`` and edit to suit your needs.
+Copy ``global.yml`` to ``~/.config/sandbubble/`` and edit to suit your needs.
 
-Create and enter a sandbox follows:
+Create a sandbox as follows:
 
-    sandbubble <name> <executable> <args>
+    sbx create <name> <executable> <args>...
 
-This will create a sandbox at ``$HOME/sandboxes/<name>``.
+You can edit the config in ``~/.config/sandbubble/<name>/config.yml`` to
+change how the sandbox will run.
 
-Sandbubble remembers your settings so you can rerun the same sandbox like
-this:
+Finally, run your sandbox like this:
 
-    sandbubble <name>
+    sbx run <name> <args>...
 
-You can edit the config in ``$HOME/sandboxes/<name>/.config/sandbubble.yml`` to change how the sandbox runs.
+# Example (sandboxing npm)
 
-To delete a sandbox:
+Create a sandbox for ``npm`` like this:
 
-    rm -rf sandboxes/<name>
+    sbx create npm -r cli npm
 
-# Command line options
+The first ``npm`` is the name of the new sandbox.  ``-r cli`` applies the
+command line rules.  The second ``npm`` is the command to run.
 
-To see the command line options run:
+Now you can run sandboxed ``npm`` like this:
 
-    sandbubble --help
+    sbx run npm run build
+
+Note that if you want to any pass argument starting with ``-`` to your sandbox
+and not to Sandbubble then you will need to add ``--`` like this:
+
+    sbx run npm -- --help
+
+# Command line
+Sandbubble's main program is called ``sbx``.  It takes one of the following
+subcommands:
+
+    create       create a new sandbox
+    reconfig     reconfigure an existing sandbox
+    run          run an existing sandbox
+    list         list existing sandboxes
+    list-rules   list available rules
+    delete       delete an existing sandbox
+    show         print sandbox config and exit
+    help         show this help message and exit
+
+To see the help for a subcommand run:
+
+    sbx <subcommand> --help
 
 # Configuration
 
-Sandbubble uses a [YAML](https://yaml.org/) configuration file.  There are two top level keys ``rules`` and ``defaults``.
+Sandbubble uses a [YAML](https://yaml.org/) configuration file.  A config
+consists of a top-level dictionary containing up to 4 keys, as follows:
 
-## Rules
-Under the ``rules`` key are arbitrary named sets of rules.  For example,
-a configuration which does nothing but has two rules ``a`` and ``b`` would look like this:
+- ``use``     - A list of rules to use by default.
+- ``command`` - A list containing the default command and any arguments.
+- ``imports`` - A list of paths to other configs to import rules from.
+- ``rules``   - A dictionary containing all the applicable rules.
+
+For example:
 
 ```yaml
-rules:
-  a:
-  b:
+use: [gui, gpu]
+command: [java, -jar, Mindustry.jar]
+imports: [$HOME/.config/sandbubble/global.yml]
 ```
 
-Rule names are referenced by the ``use`` rule or the ``use`` default.
+The above config is for a sandbox that runs the game Mindustry.  The jar
+file is placed in the sandbox's home directory.  The ``gui`` rule access
+to the Graphical User Interface and the ``gpu`` rule access to the GPU.
 
-### String variable replacement
+## Variable replacement
 
-Parameter strings in rules may contain variable references that are replaced
-using Python 3 string format syntax.  Valid replacement variables are as follows:
-
-- ``env[<name>]``
-  Replaced with an environment variable.
-
-- ``name``
-  Replaced with the name of the sandbox.
-
-- ``pid``
-  Replaced with the process ID.
+Parameter strings in rules may contain environment variable references like ``$NAME`` or ``${NAME}``.
 
 Example:
 
@@ -83,28 +103,93 @@ Example:
 rules:
   private-home:
     - bind:
-        path: '{env[HOME]}/sandboxes/{name}/'
-        dst: '{env[HOME]}'
+        path: $HOME/sandboxes/$SANDBOX
+        dst: $HOME
         read-write: true
         create: skel
-    - dir: '{env[HOME]}/.config'
-    - dir: '{env[HOME]}/.cache'
-    - dir: '{env[HOME]}/.local/share'
+    - dir: $HOME/.config
+    - dir: $HOME/.cache
+    - dir: $HOME.local/share
 ```
 
-The above rule creates a private home directory with several subdirectries.
+The above rule creates a private home directory with several subdirectories.
 
-### ``args: [<arg>...]``
+You may also use ``~`` instead of ``$HOME``.
+
+A few environment variables are defined by Sandbubble itself these are:
+
+- ``SANDBOX``        - The name of the current sandbox.
+- ``SANDBOX_HOME``   - The home directory of the sandbox.
+- ``SANDBOX_CONFIG`` - The path to the sandbox's config file.
+- ``SANDBOX_ROOT``   - Sandbubble's root config directory.
+
+Note, these variable may be used in configs but are not automatically passed
+to the sandboxed process.
+
+## Key: ``use: [<rule1>, <rule2>, ...]``
+
+When ``use`` is specified at the top level of the sandbox config file the
+rules it lists will be applied unless ``-r <rule>`` is passed.  ``use`` is
+first set when the sandbox is created.
+
+For example:
+
+```yaml
+use: [common, private-home, x11, pulseaudio, portal, accessibility]
+```
+
+## Key: ``command: [<command>, <arg1>, ...]``
+
+When ``command`` is specified at the top level of a sandbox config it
+specifies the command to run in the sandbox and its arguments.
+
+When ``command`` is specified in Sandbubble's global config file it specifies
+the default command and arguments to apply to new sandboxes.
+
+## Key: ``imports: [<path>...]``
+
+Imports may be relative or absolute paths.  Paths are interpreted relative
+to the importing file.
+
+## Key: ``rules: {...}``
+
+Under the ``rules`` key are arbitrary named rules containing lists of
+configuration actions.  If the first item in a rule's list is a string
+it is the rule's help which you can see with ``sbx list-rules``.
+
+For example, a simple config with two rules that runs
+``bash`` and binds three read-only directories could look like this:
+
+```yaml
+use: [bin, lib]
+command: [bash]
+rules:
+  bin:
+    - Binds the /bin and /usr/bin directories read-only.
+    - bind: /bin
+    - bind: /usr/bin
+  lib:
+    - Binds the /lib directory read-only.
+    - bind: /lib
+```
+
+Rules are referenced by name with the ``use`` top-level key or a ``use``
+action.
+
+Of course, the above example is not very useful.  You need a more
+complicated config in most cases.  Many useful rules are already defined in
+``global.yml``.
+
+### Action: ``args: [<arg>...]``
 A list of arbitrary additional arguments to pass to ``bwrap``.
 
 ```yaml
 rules:
   common:
-    - args: [--clearenv, --unshare-pid, --die-with-parent, --proc, /proc,
-        --dev, /dev, --tmpfs, /tmp]
+    - args: [--clearenv, --unshare-pid, --die-with-parent]
 ```
 
-### ``bind: {...}``
+### Action: ``bind: {...}``
 May be a simple string in which case it describes a path to bind in read-only
 mode.  E.g.:
 
@@ -131,7 +216,7 @@ Or it may be a dictionary with the following optional keys:
 
   If the special value `skel` is specified then the contents of
   ``/etc/skel`` will be copied to the destination directory when it is first
-  created.  This is useful to setup a new default home directory.  Note,
+  created.  This is useful to setup a new sandbox home directory.  Note,
   if ``.bashrc`` exists in ``/etc/skel`` the name of the sandbox will be added
   to the command prompt.
 
@@ -142,17 +227,17 @@ Or it may be a dictionary with the following optional keys:
 - ``cwd: <bool>``
   If true the current directory will be taken as the source path.
 
-### ``chdir: <path>``
+### Action: ``chdir: <path>``
 Change directories inside the sandbox.
 
 ```yaml
 rules:
   example:
-    - bind: '{env[HOME]}/tmp'
-    - chdir: '{env[HOME]}/tmp'
+    - bind: $HOME/tmp
+    - chdir: $HOME/tmp
 ```
 
-### ``dbus: {...}``
+### Action: ``dbus: {...}``
 
 Parameters are:
 
@@ -166,30 +251,35 @@ Parameters are:
 - ``path: <string>``
   A dbus path.
 
-### ``dir: <path>``
+### Action: ``del-arg: [<pattern>...]``
+Delete an argument previously added to ``bwrap`` by another rule.  If a
+series of arguments match all of the provided patterns then those arguments
+will be removed from the ``bwrap`` command line.
+
+```yaml
+rules:
+  example:
+    - del-arg: [--die-with-parent]
+```
+
+### Action: ``dev: <path>``
+Create a dev file system at the specified path.
+
+### Action: ``dir: <path>``
 Create a directory.  Takes a single string parameter.
 
 ```yaml
 rules:
   example:
-    - dir: '{env[HOME]}/example'
+    - dir: $HOME/example
 ```
 
-### ``file: [<data>, <dst>]``
-Copy the specified ``<data>`` to the target file ``<dst>``.
-
-```yaml
-rules:
-  example:
-    - file: ['Hello World!', 'hello.txt']
-```
-
-### ``restrict_tty``
-Restricts access to the calling terminal to prevent CVE-2017-5226.
-
-### ``env: [<name>...] | {<name>: <value>...}``
+### Action: ``env: [<name>...] | {<name>: <value>...}``
 Set environment variables.  Either a list of variables to define empty or
 a dictionary of name values pairs.
+
+Note, variables are set in the sandbox's environment and so are not available
+from referencing with ``$NAME`` in other rules.
 
 ```yaml
 rules:
@@ -198,7 +288,47 @@ rules:
     - env: [LANG, TERM, HOME, LOGNAME, USER]
 ```
 
-### ``symlink: [<src>, <dst>]``
+The above example sets the ``PATH`` and then copies the other variables from
+the parent environment to the sandbox's environment.
+
+### Action: ``file: [<data>, <dst>]``
+Copy the specified ``<data>`` to the target file ``<dst>``.
+
+```yaml
+rules:
+  example:
+    - file: ['Hello World!', 'hello.txt']
+```
+
+### Action: ``ifdef: [<var>, <action>...]``
+If the specified environment variable is set apply the actions.
+
+```yaml
+rules:
+  example:
+    - ifdef: [WITH_DOWNLOADS, {use: downloads}]
+
+  downloads:
+    - bind: {path: $HOME/Downloads, read-write: true}
+```
+
+The above example applies the ``downloads`` rule if ``WITH_DOWNLOADS`` is
+set in the environment.
+
+### Action: ``ifeq: [<value1>, <value2>, <action>...]``
+If after variable replacement the two values are equal then apply the actions.
+
+### Action: ``ifneq: [<value1>, <value2>, <action>...]``
+If after variable replacement the two values are not equal then apply the
+actions.
+
+### Action: ``proc: <path>``
+Create a proc file system at the specified path.
+
+### Action: ``restrict_tty``
+Restricts access to the calling terminal to prevent CVE-2017-5226.
+
+### Action: ``symlink: [<src>, <dst>]``
 Create a symlink.
 
 ```yaml
@@ -207,7 +337,10 @@ rules:
     - symlink: [usr/bin, /bin]
 ```
 
-### ``use: [<rule1>, <rule2>, ...]``
+### Action: ``tmpfs: <path>``
+Create a tmp file system at the specified path.
+
+### Action: ``use: [<rule1>, <rule2>, ...]``
 Apply the named rules.
 
 ```yaml
@@ -217,21 +350,3 @@ rules:
   b:
   c:
 ```
-
-## Defaults
-
-The ``defaults`` section contains default options.  When a sandbox is created
-the ``defaults`` section is created in it's own ``sandbubble.yml`` file
-recording the command run and which rules were used.
-
-```yaml
-defaults:
-  use: [common, private-home, x11, pulseaudio, portal, accessibility]
-  command: [bash]
-```
-
-### ``use: [<rule1>, <rule2>, ...]``
-A list of rules to apply.
-
-### ``command: [<command>, <arg1>, ...]``
-The command to run.

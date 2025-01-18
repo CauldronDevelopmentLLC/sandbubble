@@ -1,0 +1,104 @@
+use: [common, private-home]
+command: [bash]
+rules:
+  common:
+    - >-
+      Apply common restrictions such as limiting access to environment
+      variables and the file system while still allowing basic programs to
+      operate correctly.
+
+    - args: [--clearenv, --unshare-pid, --die-with-parent]
+    - proc: /proc
+    - dev: /dev
+    - tmpfs: /tmp
+    - restrict-tty:
+    - env: [SANDBOX]
+    - env: {PATH: /usr/bin:/bin}
+    - env: [LANG, XDG_RUNTIME_DIR, XDG_SESSION_TYPE, TERM, HOME, LOGNAME, USER]
+    - bind: /etc
+    - bind: /usr
+    - bind: /lib
+    - bind: /lib64
+    - symlink: [usr/bin, /bin]
+    - symlink: [usr/bin, /sbin]
+    - tmpfs: $XDG_RUNTIME_DIR
+    - bind: {path: /run/systemd/resolve, try: true}
+    - ifdef: [WITH_DOWNLOADS, {use: downloads}]
+
+  downloads:
+    - Bind the user's Downloads directory.
+    - bind: {path: $HOME/Downloads, read-write: true}
+
+  private-home:
+    - Creates a private writable home directory.
+    - bind:
+        path: $SANDBOX_HOME
+        dst: $HOME
+        read-write: true
+        create: skel
+    - dir: $HOME/.config
+    - dir: $HOME/.cache
+    - dir: $HOME/.local/share
+
+  cli:
+    - Enables typical Command Line Interface options.
+    - use: [common, private-home, cwd]
+
+  gui:
+    - Enables typical Graphical User Interface options.
+    - use: [common, private-home, x11, audio, dbus, accessibility]
+
+  cwd:
+    - Bind the current directory with write permission.
+    - bind: {cwd: true, read-write: true}
+
+  x11:
+    - Allows access to an X11 display.
+    - env: DISPLAY
+    - bind: /tmp/.X11-unix/
+
+  audio:
+    - Enables pulseaudio or pipewire.
+    - bind: $XDG_RUNTIME_DIR/pulse/native
+    - bind: {path: $HOME/.config/pulse/cookie, try: true}
+    - bind: {path: $XDG_RUNTIME_DIR/pipewire-0, try: true}
+
+  accessibility:
+    - Enables dbus accessibility calls.
+    - dbus: {allow: call, path: 'org.a11y.Bus.*=*'}
+    - bind: {path: $XDG_RUNTIME_DIR/at-spi, try: true}
+
+  dbus:
+    - Enables limited dbus access.
+    - file: ['', $XDG_RUNTIME_DIR/flatpak-info]
+    - file: ['', '/.flatpak-info']
+    - dbus: {allow: call, path: 'org.freedesktop.portal.*=*'}
+    - dbus:
+        allow: broadcast
+        path: 'org.freedesktop.portal.*=@/org/freedesktop/portal/*'
+
+  gpu:
+    - Enables GPU access.
+    - use: [nvidia]
+    - bind: {path: /dev/dri, dev: true}
+    - bind: /sys
+
+  nvidia:
+    - Enables access to NVidia GPU device.
+    - bind: {path: /dev/nvidiactl, dev: true}
+    - bind: {path: /dev/nvidia-uvm, dev: true}
+    - bind: {path: /dev/nvidia-uvm-tools, dev: true}
+    - bind: {path: /dev/nvidia-modeset, dev: true}
+    - bind: {path: /dev/nvidia0, dev: true, try: true}
+    - bind: {path: /dev/nvidia1, dev: true, try: true}
+
+  firefox:
+    - A special rule for running the Firefox web browser.
+    - use: [gui, downloads]
+    - dbus: {allow: own, path: org.mozilla.firefox.*}
+    - bind: {path: $HOME/.config/mozilla, dst: $HOME/.mozilla}
+
+  gthumb:
+    - A special rule for running the GThumb image viewer.
+    - use: [gui]
+    - dbus: {allow: own, path: org.gnome.gThumb.*}

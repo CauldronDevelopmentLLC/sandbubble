@@ -1,0 +1,504 @@
+#!/usr/bin/env python3
+
+import argparse
+import os
+import sys
+import tempfile
+import yaml
+import shlex
+import shutil
+import re
+from functools import reduce
+
+
+SANDBOX_ROOT   = '$HOME/.config/sandbubble'
+SANDBOX_HOME   = '$HOME/.local/share/sandbubble/$SANDBOX'
+SANDBOX_CONFIG = f'{SANDBOX_ROOT}/$SANDBOX/config.yml'
+DEFAULT_CONFIG = f'{SANDBOX_ROOT}/global.yml'
+
+
+class SBError(Exception): pass
+
+
+class Dumper(yaml.Dumper):
+  def increase_indent(self, flow = False, indentless = False):
+    return super().increase_indent(flow, False)
+
+
+class Sandbubble:
+  def __init__(self, args):
+    self.args             = args
+    self.cmd_args         = []
+    self.system_bus_args  = set()
+    self.session_bus_args = set()
+    self.loaded           = set()
+    self.applied          = []
+    self.rules            = {}
+
+
+  def log(self, s):
+    if self.args.verbose: print(s)
+
+
+  def expand_path(self, path): return os.path.expanduser(self.expand(path))
+  def expand(self, s): return os.path.expandvars(str(s))
+
+
+  def require_config(self):
+    config = self.expand_path(SANDBOX_CONFIG)
+
+    if not os.path.exists(config):
+      raise SBError(f'Sandbox "{self.args.name}" does not exists')
+
+    return config
+
+
+  def load_config(self, path):
+    path = self.expand_path(path)
+
+    # Only load config once
+    npath = os.path.normpath(path)
+    if npath in self.loaded: return
+    self.loaded.add(npath)
+
+    if not os.path.exists(path):
+      raise SBError(f'Config "{path}" not found')
+
+    self.log(f'Loading config "{path}"')
+
+    with open(path) as f: config = yaml.full_load(f)
+    rules = config.get('rules', {})
+
+    if not isinstance(rules, dict):
+      raise SBError('"rules" is not a dictionary')
+
+    # Imports
+    imports = config.get('imports', [])
+    if not isinstance(imports, list):
+      raise SBError('"imports" is not a list')
+
+    for imp in imports:
+      imp = self.expand_path(imp)
+      if not os.path.isabs(imp):
+        imp = os.path.relpath(imp, os.path.dirname(path))
+      self.load_config(imp)
+
+    # Load rules (overwriting previous)
+    for name, rule in rules.items():
+      self.rules[name] = rule
+
+    # Save config (overwriting previous)
+    self.config = config
+
+
+  def apply_rule(self, rule):
+    if isinstance(rule, list):
+      for r in rule: self.apply_rule(r)
+      return
+
+    # Rule names can contain variable references
+    rules = self.expand(rule)
+
+    # Only apply each rule once
+    if rule in self.applied: return
+    self.applied.append(rule)
+
+    self.log(f'Applying rule {rule}')
+    self.apply_actions(self.rules[rule])
+
+
+  def apply_actions(self, actions):
+    for action in actions:
+      if isinstance(action, dict):
+        self.apply_action(action)
+
+
+  def apply_action(self, action):
+    for name, params in action.items():
+      method = getattr(self, 'action_' + name.replace('-', '_'), None)
+
+      if method is None:
+        raise SBError(f'Unknown action "{name}"')
+        sys.exit(1)
+
+      method(params)
+
+
+  def action_use(self, params): self.apply_rule(params)
+
+
+  def action_args(self, params):
+    self.cmd_args.extend((self.expand(a) for a in params))
+
+
+  def action_del_arg(self, params):
+    if not isinstance(params, list) or not len(params):
+      raise SBError('"del-arg" requires non-empty list')
+
+    params = [re.compile(s) for s in params]
+
+    i = 0
+    while i < len(self.cmd_args) - len(params):
+      match = True
+      for j in range(len(params)):
+        if not params[j].fullmatch(self.cmd_args[i + j]):
+          match = False
+          break
+
+      if match:
+        self.cmd_args = self.cmd_args[:i] + self.cmd_args[i + len(params):]
+      else: i += 1
+
+
+  def action_env(self, params):
+    if isinstance(params, str): params = [params]
+
+    if isinstance(params, dict):
+      for k, v in params.items():
+        self.cmd_args.extend(('--setenv', k, self.expand(v)))
+
+    elif isinstance(params, list):
+      for k in params:
+        if k in os.environ:
+          self.cmd_args.extend(('--setenv', k, os.environ[k]))
+
+
+  def action_bind(self, params):
+    if isinstance(params, str): params = {'path': params}
+
+    src = os.getcwd() if params.get('cwd', False) else params['path']
+    dst = params.get('dst', src)
+    src = self.expand(src)
+    dst = self.expand(dst)
+
+    create = params.get('create', False)
+    if create and not os.path.exists(src):
+      os.makedirs(src)
+
+      if create == 'skel':
+        from distutils.dir_util import copy_tree
+        copy_tree('/etc/skel', src)
+
+        bashrc = src + '/.bashrc'
+        if os.path.exists(src):
+          with open(bashrc, 'a') as f:
+            f.write(f'\nPS1="({self.args.name}) $PS1"\n')
+
+    if params.get('dev', False): type = 'dev-bind'
+    else: type = 'bind' if params.get('read-write', False) else 'ro-bind'
+    if params.get('try', False): type += '-try'
+
+    self.cmd_args.extend(('--' + type, src, dst))
+
+
+  def action_dbus(self, params):
+    is_system = params.get('system', False)
+    bus_args = self.system_bus_args if is_system else self.session_bus_args
+
+    allow = params.get('allow', [])
+    if not isinstance(allow, list): allow = [allow]
+
+    for type in allow:
+      assert type in ('see', 'talk', 'own', 'call', 'broadcast')
+      bus_args.add(f'--{type}={params['path']}')
+
+
+  def action_file(self, params):
+    data, dst = params
+    pr, pw = os.pipe2(0)
+
+    if os.fork() == 0:
+      os.close(pr)
+      os.write(pw, data.encode())
+      sys.exit(0)
+
+    else:
+      os.close(pw)
+      self.cmd_args.extend(('--file', str(pr), self.expand(dst)))
+
+
+  def action_dir(self, params):
+    self.cmd_args.extend(('--dir', self.expand(params)))
+
+
+  def action_symlink(self, params):
+    if isinstance(params, str): params = [params, params]
+    self.cmd_args.extend((
+      '--symlink', self.expand(params[0]), self.expand(params[1])))
+
+
+  def action_chdir(self, params):
+    if not isinstance(params, str):
+      raise SBError('"chdir" requires string parameter')
+    self.cmd_args.extend(('--chdir', self.expand(params)))
+
+
+  def action_restrict_tty(self, params):
+    # --new-session breaks interactive sessions, this is an alternative way of
+    # fixing CVE-2017-5226
+    import seccomp
+    import termios
+    f = seccomp.SyscallFilter(defaction = seccomp.ALLOW)
+    f.add_rule(seccomp.KILL_PROCESS, 'ioctl',
+               seccomp.Arg(1, seccomp.MASKED_EQ, 0xffffffff, termios.TIOCSTI))
+    f.add_rule(seccomp.KILL_PROCESS, 'ioctl',
+               seccomp.Arg(1, seccomp.MASKED_EQ, 0xffffffff, termios.TIOCLINUX))
+    f.load()
+
+
+  def action_ifeq(self, params, ifneq = False):
+    if not isinstance(params, list) or len(params) < 2:
+      raise SBError(
+        f'"if{'n' if ifneq else ''}eq" requires a list with at least 2 ' +
+        'elements')
+
+    if (self.expand(params[0]) == self.expand(params[1])) != ifneq:
+      self.apply_actions(params[2:])
+
+
+  def action_ifneq(self, params): self.action_ifeq(params, True)
+
+
+  def action_ifdef(self, params):
+    if not isinstance(params, list) or len(params) < 1:
+      raise SBError('"ifdef" requires a non-empty list')
+
+    if params[0] in os.environ: self.apply_actions(params[1:])
+
+
+  def simple_arg(self, params, name):
+    if not isinstance(params, str):
+      raise SBError(f'"{name}" requires string parameter')
+
+    self.cmd_args.extend(('--' + name, self.expand(params)))
+
+
+  def action_dev(self, params):   self.simple_arg(params, 'dev')
+  def action_proc(self, params):  self.simple_arg(params, 'proc')
+  def action_tmpfs(self, params): self.simple_arg(params, 'tmpfs')
+
+
+  def setup_dbus_proxy(self):
+    if not (self.session_bus_args or self.system_bus_args): return
+
+    args = []
+    dir  = f'{os.environ['XDG_RUNTIME_DIR']}/xdg-dbus-proxy'
+
+    os.makedirs(dir, exist_ok = True)
+
+    if self.session_bus_args:
+      socket   = tempfile.mktemp(prefix = 'session-', dir = dir)
+      bus_addr = os.environ['DBUS_SESSION_BUS_ADDRESS']
+      args.extend([bus_addr, socket, '--filter'] + list(self.session_bus_args))
+      self.cmd_args.extend((
+        '--bind', socket, bus_addr.removeprefix('unix:path='),
+        '--setenv', 'DBUS_SESSION_BUS_ADDRESS', bus_addr))
+
+    if self.system_bus_args:
+      socket = tempfile.mktemp(prefix = 'system-', dir = dir)
+      path   = '/run/dbus/system_bus_socket'
+      args.extend([path, socket, '--filter'] + list(self.system_bus_args))
+      self.cmd_args.extend(('--bind', path, path))
+
+    # Start dbus proxy
+    pr, pw = os.pipe2(0)
+
+    if os.fork() == 0:
+      os.close(pr)
+      cmd = ['xdg-dbus-proxy', f'--fd={pw}'] + args
+      os.execlp(cmd[0], *cmd)
+
+    os.close(pw)
+    assert os.read(pr, 1) == b'x' # wait for xdg-dbus-proxy to be ready
+    self.cmd_args.extend(('--sync-fd', str(pr)))
+
+
+  def run(self):
+    # Load config
+    self.require_config()
+    self.load_config(SANDBOX_CONFIG)
+
+    # Command
+    if not 'command' in self.config:
+      raise SBError('Sandbox config is missing "command"')
+    command = self.config['command'] + self.args.args
+
+    exp_command = [self.expand(arg) for arg in command]
+    os.environ['SANDBOX_CMD'] = shlex.join(exp_command)
+    os.environ['SANDBOX_EXE'] = exp_command[0]
+
+    # Apply rules
+    self.apply_rule(self.config.get('use', []))
+    self.setup_dbus_proxy()
+
+    # Build command
+    cmd = ['bwrap'] + self.cmd_args + exp_command
+    self.log('@' + shlex.join(cmd))
+
+    # Execute
+    os.execvp(cmd[0], cmd)
+
+
+  def create(self, reconfig = False):
+    # Check sandbox config
+    sandbox_config = self.expand_path(SANDBOX_CONFIG)
+    if reconfig: self.require_config()
+    elif os.path.exists(sandbox_config):
+      raise SBError(f'Sandbox "{self.args.name}" already exists')
+
+    # Load default config
+    config = self.args.config if self.args.config else DEFAULT_CONFIG
+    self.load_config(config)
+
+    # Create sandbox config
+    command = self.args.command or self.config.get('command', ['bash'])
+    rules   = self.args.rule    or self.config.get('use', [])
+    config_data = dict(use = rules, command = command)
+
+    # Copy or import rules
+    if self.args.config: config_data['rules'] = self.rules
+    else: config_data['imports'] = [config]
+
+    # Create directory
+    config_dir = os.path.dirname(sandbox_config)
+    os.makedirs(config_dir, exist_ok = True)
+
+    # Write config
+    with open(sandbox_config, 'w') as f:
+      yaml.dump(
+        config_data, f, Dumper = Dumper, width = 80, sort_keys = False,
+        default_flow_style = False)
+
+
+  def reconfig(self): self.create(True)
+
+
+  def list(self):
+    root = self.expand_path(SANDBOX_ROOT)
+
+    for name in os.listdir(root):
+      path = f'{root}/{name}'
+      if os.path.isdir(path) and os.path.exists(f'{path}/config.yml'):
+        print(name)
+
+
+  def list_rules(self):
+    # Load default config
+    config = self.args.config if self.args.config else DEFAULT_CONFIG
+    self.load_config(config)
+
+    width = reduce(lambda x, name: max(len(name), x), self.rules, 0)
+
+    for rule in sorted(self.rules):
+      help = ''
+
+      first = self.rules[rule][:1]
+      if len(first) and isinstance(first[0], str): help = first[0]
+
+      use = []
+      for action in self.rules[rule]:
+        if isinstance(action, dict):
+          for name, params in action.items():
+            if name == 'use':
+              if isinstance(params, str): use.append(params)
+              else: use += params
+
+      if len(use):
+        if help: help = help + ' '
+        help += f'(Uses: {' '.join(use)})'
+
+      if help: print(f'{rule:<{width}} - {help}')
+      else: print(rule)
+
+
+  def delete(self):
+    config = self.require_config()
+    paths = [os.path.dirname(config)]
+    home = self.expand_path(SANDBOX_HOME)
+    if os.path.isdir(home): paths.append(home)
+
+    for path in paths: self.log(f'Preparing to delete "{path}"')
+
+    if not self.args.force:
+      response = input(f'Delete sandbox "{self.args.name}"? [Yes/No] ')
+      if not response.lower() in ('yes', 'y'): return
+
+    for path in paths: shutil.rmtree(path)
+
+
+  def show(self):
+    with open(self.require_config(), 'r') as f:
+      sys.stdout.write(f.read())
+
+
+  def exec(self):
+    if hasattr(self.args, 'name'):
+      os.environ['SANDBOX']        = self.args.name
+      os.environ['SANDBOX_HOME']   = self.expand(SANDBOX_HOME)
+      os.environ['SANDBOX_CONFIG'] = self.expand(SANDBOX_CONFIG)
+
+    os.environ['SANDBOX_ROOT'] = SANDBOX_ROOT
+
+    getattr(self, self.args.cmd.replace('-', '_'))()
+
+
+# Arguments
+desc = '''\
+Sandbubble is a tool for creating sandboxes in user space.\
+'''
+
+parser = argparse.ArgumentParser(description = desc)
+parser.add_argument(
+  '--verbose', '-v', action = 'store_true', help = 'enable verbose logging')
+subs = parser.add_subparsers(dest = 'cmd', metavar = '<subcommand>')
+
+create_parser = subs.add_parser('create', help = 'create a new sandbox')
+create_parser.add_argument(
+  '--config', '-c', help = 'override the default config file and copy the ' +
+  'rules to the new sandbox rather than import them')
+create_parser.add_argument(
+  '--rule', '-r', action = 'append', help = 'rule or rules to apply ' +
+  'instead of the default rules')
+create_parser.add_argument('name', help = 'name of the sandbox')
+create_parser.add_argument(
+  'command', nargs = '*', help = 'the command to run and optional arguments, ' +
+  'defaults are used if not specified')
+
+subs.add_parser(
+  'reconfig', parents = [create_parser], add_help = False,
+  help = 'reconfigure an existing sandbox')
+
+run_parser = subs.add_parser('run', help = 'run an existing sandbox')
+run_parser.add_argument('name', help = 'name of the sandbox')
+run_parser.add_argument('args', nargs = '*',
+  help = 'optional additional arguments to pass to the sandbox command')
+
+subs.add_parser('list', help = 'list existing sandboxes')
+
+lr_parser = subs.add_parser('list-rules', help = 'list available rules')
+lr_parser.add_argument('--config', '-c', help = 'override the default config')
+
+del_parser = subs.add_parser(
+  'delete', help = 'delete an existing sandbox')
+del_parser.add_argument('name', help = 'name of the sandbox')
+del_parser.add_argument(
+  '--force', '-f', action = 'store_true', help = 'delete without asking')
+
+show_parser = subs.add_parser(
+  'show',help = 'print sandbox config and exit')
+show_parser.add_argument('name', help = 'name of the sandbox')
+
+subs.add_parser('help', help = 'show this help message and exit')
+
+args = parser.parse_args()
+
+if args.cmd is None or args.cmd == 'help':
+  parser.print_help()
+  sys.exit(1)
+
+try:
+  Sandbubble(args).exec()
+
+except SBError as e:
+  print(f'ERROR: {str(e)}.', file = sys.stderr)
+  sys.exit(1)
