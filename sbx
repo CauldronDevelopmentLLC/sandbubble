@@ -431,6 +431,18 @@ class Sandbubble:
       sys.stdout.write(f.read())
 
 
+  def edit(self):
+    if not 'EDITOR' in os.environ:
+      raise SBError('"EDITOR" environment variable is not set')
+
+    editor = os.environ['EDITOR']
+    if not shutil.which(editor):
+      raise SBError('"EDITOR" environment variable set to invalid command')
+
+    cmd = [editor, self.require_config()]
+    os.execvp(cmd[0], cmd)
+
+
   def exec(self):
     if hasattr(self.args, 'name'):
       os.environ['SANDBOX']        = self.args.name
@@ -487,6 +499,10 @@ del_parser.add_argument(
 show_parser = subs.add_parser(
   'show',help = 'print sandbox config and exit')
 show_parser.add_argument('name', help = 'name of the sandbox')
+
+edit_parser = subs.add_parser(
+  'edit',help = 'edit sandbox config')
+edit_parser.add_argument('name', help = 'name of the sandbox')
 
 subs.add_parser('help', help = 'show this help message and exit')
 

@@ -12,9 +12,9 @@ rules:
     - dev: /dev
     - tmpfs: /tmp
     - restrict-tty:
-    - env: [SANDBOX]
     - env: {PATH: /usr/bin:/bin}
-    - env: [LANG, XDG_RUNTIME_DIR, XDG_SESSION_TYPE, TERM, HOME, LOGNAME, USER]
+    - env: [LANG, XDG_RUNTIME_DIR, XDG_SESSION_TYPE, TERM, HOME, LOGNAME, USER,
+            EDITOR, SANDBOX]
     - bind: /etc
     - bind: /usr
     - bind: /lib
