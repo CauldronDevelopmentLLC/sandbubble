@@ -298,10 +298,10 @@ rules:
     - del-arg: [--die-with-parent]
 ```
 
-### Action: ``dev: <path>``
-Create a dev file system at the specified path.
+### Action: ``dev: <path> | {path: <path>, perms: <perms>}``
+Create a dev file system at the specified path.  See ``tmpfs``.
 
-### Action: ``dir: <path>``
+### Action: ``dir: <path> | {path: <path>, perms: <perms>}``
 Create a directory inside the sandbox.
 
 Example:
@@ -313,7 +313,7 @@ rules:
 
 ### Action: ``env: [<name>...] | {<name>: <value>...}``
 Set environment variables.  Either a list of variables to copy from the
-parent environment or a dictionary of name values pairs.
+parent environment, if they exist, or a dictionary of name-value pairs.
 
 Note, variables are set in the sandbox's environment and so are not available
 to reference (e.g. ``$NAME``) in configs.
@@ -329,8 +329,9 @@ rules:
 The above example sets the ``PATH`` and then copies the other variables from
 the parent environment to the sandbox's environment.
 
-### Action: ``file: [<data>, <dst>]``
-Copy the specified ``<data>`` to the target file ``<dst>`` in the sandbox.
+### Action: ``file: <path> | {data: <data>, path: <path>, perms: <perms>``
+Copy the specified ``<data>`` to the target file ``<path>`` in the sandbox.
+If just a path is specified, an empty file is created.
 
 Example:
 ```yaml
@@ -362,10 +363,10 @@ If after variable replacement the two values are equal then apply the actions.
 If after variable replacement the two values are not equal then apply the
 actions.
 
-### Action: ``proc: <path>``
-Create a proc file system at the specified path.
+### Action: ``proc: <path> | {path: <path>, perms: <perms>}``
+Create a proc file system at the specified path.  See ``tmpfs``.
 
-### Action: ``restrict_tty``
+### Action: ``restrict_tty:``
 Restrict access to the calling terminal to prevent CVE-2017-5226.
 
 ### Action: ``symlink: [<src>, <dst>]``
@@ -378,8 +379,19 @@ rules:
     - symlink: [usr/bin, /bin]
 ```
 
-### Action: ``tmpfs: <path>``
-Create a tmp file system at the specified path.
+### Action: ``tmpfs: <path> | {path: <path>, size: <size>, perms: <perms>}``
+Create a tmp file system at the specified path.  Optionally, specify the
+size in bytes and permissions.  Permissions are numerical and usually specified in octal.
+
+Example:
+```yaml
+rules:
+  example:
+    - tmpfs:
+      path: /tmp
+      size: 10485760
+      perms: 0o700
+```
 
 ### Action: ``use: [<rule1>, <rule2>, ...]``
 Apply the named rules.

@@ -15,6 +15,7 @@ SANDBOX_ROOT   = '$HOME/.config/sandbubble'
 SANDBOX_HOME   = '$HOME/.local/share/sandbubble/$SANDBOX'
 SANDBOX_CONFIG = f'{SANDBOX_ROOT}/$SANDBOX/config.yml'
 DEFAULT_CONFIG = f'{SANDBOX_ROOT}/global.yml'
+APP_BASE       = 'com.cauldrondevelopment.sandbubble'
 
 
 class SBError(Exception): pass
@@ -23,6 +24,19 @@ class SBError(Exception): pass
 class Dumper(yaml.Dumper):
   def increase_indent(self, flow = False, indentless = False):
     return super().increase_indent(flow, False)
+
+
+def fork_and_write(data):
+  pr, pw = os.pipe2(0)
+
+  if os.fork() == 0:
+    os.close(pr)
+    os.write(pw, data.encode())
+    sys.exit(0)
+
+  os.close(pw)
+
+  return pr
 
 
 class Sandbubble:
@@ -124,6 +138,11 @@ class Sandbubble:
       method(params)
 
 
+  def add_perms(self, params):
+    if isinstance(params, dict) and 'perms' in params:
+      self.cmds_args.extend(('--perms', f'0{int(params['perms'], 0):o}'))
+
+
   def action_use(self, params): self.apply_rule(params)
 
 
@@ -188,7 +207,8 @@ class Sandbubble:
     else: type = 'bind' if params.get('read-write', False) else 'ro-bind'
     if params.get('try', False): type += '-try'
 
-    self.cmd_args.extend(('--' + type, src, dst))
+    self.add_perms(params)
+    self.cmd_args.extend((f'--{type}', src, dst))
 
 
   def action_dbus(self, params):
@@ -204,25 +224,23 @@ class Sandbubble:
 
 
   def action_file(self, params):
-    data, dst = params
-    pr, pw = os.pipe2(0)
+    if isinstance(params, str): params = dict(path = params)
 
-    if os.fork() == 0:
-      os.close(pr)
-      os.write(pw, data.encode())
-      sys.exit(0)
-
-    else:
-      os.close(pw)
-      self.cmd_args.extend(('--file', str(pr), self.expand(dst)))
+    fd = fork_and_write(params.get('data', ''))
+    self.add_perms(params)
+    self.cmd_args.extend(('--file', f'{fd}', self.expand(params['path'])))
 
 
   def action_dir(self, params):
-    self.cmd_args.extend(('--dir', self.expand(params)))
+    if isinstance(params, str): params = {'path': params}
+
+    self.add_perms(params)
+    self.cmd_args.extend(('--dir', self.expand_path(params['path'])))
 
 
   def action_symlink(self, params):
     if isinstance(params, str): params = [params, params]
+    self.add_perms(params)
     self.cmd_args.extend((
       '--symlink', self.expand(params[0]), self.expand(params[1])))
 
@@ -266,23 +284,33 @@ class Sandbubble:
     if params[0] in os.environ: self.apply_actions(params[1:])
 
 
-  def simple_arg(self, params, name):
-    if not isinstance(params, str):
-      raise SBError(f'"{name}" requires string parameter')
+  def fs_arg(self, params, name):
+    if isinstance(params, str): path = params
+    elif isinstance(params, dict):
+      path = params.get('path')
+      self.add_perms(params)
+    else: raise SBError(f'"{name}" requires string or dict parameter')
 
-    self.cmd_args.extend(('--' + name, self.expand(params)))
+    self.cmd_args.extend((f'--{name}', self.expand_path(path)))
 
 
-  def action_dev(self, params):   self.simple_arg(params, 'dev')
-  def action_proc(self, params):  self.simple_arg(params, 'proc')
-  def action_tmpfs(self, params): self.simple_arg(params, 'tmpfs')
+  def action_dev(self,  params):  self.fs_arg(params, 'dev')
+  def action_proc(self, params):  self.fs_arg(params, 'proc')
+
+
+  def action_tmpfs(self, params):
+    if isinstance(params, dict) and 'size' in params:
+      self.cmd_args.extend(('--size', self.expand(params['size'])))
+
+    self.fs_arg(params, 'tmpfs')
 
 
   def setup_dbus_proxy(self):
     if not (self.session_bus_args or self.system_bus_args): return
 
     args = []
-    dir  = f'{os.environ['XDG_RUNTIME_DIR']}/xdg-dbus-proxy'
+    runtime_dir = os.environ['XDG_RUNTIME_DIR']
+    dir  = f'{runtime_dir}/xdg-dbus-proxy'
 
     os.makedirs(dir, exist_ok = True)
 
@@ -300,17 +328,30 @@ class Sandbubble:
       args.extend([path, socket, '--filter'] + list(self.system_bus_args))
       self.cmd_args.extend(('--bind', path, path))
 
+    if self.args.verbose: args.append('--log')
+
+    # Wrap proxy
+    data = f'[Application]\nname={os.environ['APP_NAME']}\n'
+    fd = fork_and_write(data)
+    cmd = ['bwrap', '--new-session', '--symlink', '/usr/lib64', '/lib64',
+      '--ro-bind', '/usr/lib', '/usr/lib', '--ro-bind', '/usr/lib64',
+      '/usr/lib64', '--ro-bind', '/usr/bin', '/usr/bin', '--clearenv',
+      '--bind', runtime_dir, runtime_dir, '--ro-bind-data', f'{fd}',
+      '/.flatpak-info', '--die-with-parent', '--']
+
     # Start dbus proxy
     pr, pw = os.pipe2(0)
+    cmd += ['xdg-dbus-proxy', f'--fd={pw}'] + args
 
     if os.fork() == 0:
       os.close(pr)
-      cmd = ['xdg-dbus-proxy', f'--fd={pw}'] + args
       os.execlp(cmd[0], *cmd)
 
     os.close(pw)
-    assert os.read(pr, 1) == b'x' # wait for xdg-dbus-proxy to be ready
-    self.cmd_args.extend(('--sync-fd', str(pr)))
+    if os.read(pr, 1) != b'x': # wait for xdg-dbus-proxy to be ready
+      raise SBError('Failed to start xdg-dbus-proxy')
+
+    self.cmd_args.extend(('--sync-fd', f'{pr}'))
 
 
   def run(self):
@@ -319,9 +360,12 @@ class Sandbubble:
     self.load_config(SANDBOX_CONFIG)
 
     # Command
-    if not 'command' in self.config:
-      raise SBError('Sandbox config is missing "command"')
-    command = self.config['command'] + self.args.args
+    if self.args.command: command = [self.args.command]
+    else:
+      if not 'command' in self.config:
+        raise SBError('Sandbox config is missing "command"')
+      command = self.config['command']
+    command += self.args.args
 
     exp_command = [self.expand(arg) for arg in command]
     os.environ['SANDBOX_CMD'] = shlex.join(exp_command)
@@ -448,8 +492,9 @@ class Sandbubble:
       os.environ['SANDBOX']        = self.args.name
       os.environ['SANDBOX_HOME']   = self.expand(SANDBOX_HOME)
       os.environ['SANDBOX_CONFIG'] = self.expand(SANDBOX_CONFIG)
+      os.environ['APP_NAME']       = f'{APP_BASE}.{self.args.name}'
 
-    os.environ['SANDBOX_ROOT'] = SANDBOX_ROOT
+    os.environ['SANDBOX_ROOT'] = self.expand(SANDBOX_ROOT)
 
     getattr(self, self.args.cmd.replace('-', '_'))()
 
@@ -482,6 +527,8 @@ subs.add_parser(
 
 run_parser = subs.add_parser('run', help = 'run an existing sandbox')
 run_parser.add_argument('name', help = 'name of the sandbox')
+run_parser.add_argument(
+  '--command', '-C', help = 'override the sandbox command')
 run_parser.add_argument('args', nargs = '*',
   help = 'optional additional arguments to pass to the sandbox command')
 
