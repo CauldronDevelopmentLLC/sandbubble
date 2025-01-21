@@ -15,7 +15,7 @@ SANDBOX_ROOT   = '$HOME/.config/sandbubble'
 SANDBOX_HOME   = '$HOME/.local/share/sandbubble/$SANDBOX'
 SANDBOX_CONFIG = f'{SANDBOX_ROOT}/$SANDBOX/config.yml'
 DEFAULT_CONFIG = f'{SANDBOX_ROOT}/global.yml'
-APP_BASE       = 'com.cauldrondevelopment.sandbubble'
+APP_BASE       = 'org.sandbubble'
 
 
 class SBError(Exception): pass

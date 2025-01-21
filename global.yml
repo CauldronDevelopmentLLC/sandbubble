@@ -98,7 +98,11 @@ rules:
     - dbus:
         allow: broadcast
         path: 'org.freedesktop.portal.*=@/org/freedesktop/portal/*'
-    - bind: {path: $XDG_RUNTIME_DIR/doc, read-write: true, try: true}
+    - bind:
+        path: $XDG_RUNTIME_DIR/doc/by-app/$APP_NAME
+        dst: $XDG_RUNTIME_DIR/doc
+        read-write: true
+        create: true
 
   gpu:
     - Enables GPU access.
