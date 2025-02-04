@@ -18,9 +18,14 @@ rules:
     - env: [LANG, XDG_RUNTIME_DIR, XDG_SESSION_TYPE, TERM, HOME, LOGNAME, USER,
             EDITOR, SANDBOX]
     - bind: /etc
-    - bind: /usr
-    - bind: /lib
-    - bind: /lib64
+    - symlink: [/usr/lib, /lib]
+    - symlink: [/usr/lib64, /lib64]
+    - bind: /usr/lib
+    - bind: /usr/lib64
+    - bind: /usr/libexec
+    - bind: /usr/bin
+    - bind: /usr/share
+    - bind: /usr/include
     - symlink: [usr/bin, /bin]
     - symlink: [usr/bin, /sbin]
     - tmpfs: $XDG_RUNTIME_DIR
@@ -94,21 +99,28 @@ rules:
       It allows access to files outside the sandbox but only via the
       systems file selection dialog.  As well as, printing and screen
       sharing services.
-    - dbus: {allow: call, path: 'org.freedesktop.portal.*=*'}
+    - dbus: {allow: talk, path: org.freedesktop.portal.Documents}
+    - dbus: {allow: talk, path: org.freedesktop.portal.Flatpak}
+    - dbus: {allow: talk, path: org.freedesktop.portal.Desktop}
+    - dbus: {allow: talk, path: org.freedesktop.portal.FileChooser}
+    - dbus: {allow: talk, path: org.freedesktop.portal.Print}
+    - dbus: {allow: talk, path: org.freedesktop.portal.Camera}
+    - dbus: {allow: talk, path: org.freedesktop.portal.Device}
     - dbus:
         allow: broadcast
-        path: 'org.freedesktop.portal.*=@/org/freedesktop/portal/*'
+        path: org.freedesktop.portal.Desktop=org.freedesktop.portal.Settings.SettingChanged@/org/freedesktop/portal/desktop
     - bind:
         path: $XDG_RUNTIME_DIR/doc/by-app/$APP_NAME
         dst: $XDG_RUNTIME_DIR/doc
         read-write: true
-        create: true
+        try: true
 
   gpu:
     - Enables GPU access.
     - use: [nvidia]
     - bind: {path: /dev/dri, dev: true}
-    - bind: /sys
+    - bind: /sys/dev/char
+    - bind: /sys/devices
 
   nvidia:
     - Enables access to NVidia GPU device.
