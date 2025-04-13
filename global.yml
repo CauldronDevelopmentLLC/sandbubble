@@ -79,6 +79,7 @@ rules:
     - bind: $XDG_RUNTIME_DIR/pulse/native
     - bind: {path: $HOME/.config/pulse/cookie, try: true}
     - bind: {path: $XDG_RUNTIME_DIR/pipewire-0, try: true}
+    - bind: {path: /dev/snd, dev: true, try: true}
 
   video:
     - Enables access to video devices.
@@ -106,6 +107,7 @@ rules:
     - dbus: {allow: talk, path: org.freedesktop.portal.Print}
     - dbus: {allow: talk, path: org.freedesktop.portal.Camera}
     - dbus: {allow: talk, path: org.freedesktop.portal.Device}
+    - dbus: {allow: talk, path: org.freedesktop.portal.*}
     - dbus:
         allow: broadcast
         path: org.freedesktop.portal.Desktop=org.freedesktop.portal.Settings.SettingChanged@/org/freedesktop/portal/desktop
@@ -128,8 +130,10 @@ rules:
     - bind: {path: /dev/nvidia-uvm,       dev: true}
     - bind: {path: /dev/nvidia-uvm-tools, dev: true}
     - bind: {path: /dev/nvidia-modeset,   dev: true}
+    - bind: {path: /dev/nvidia-caps,      dev: true, try: true}
     - bind: {path: /dev/nvidia0,          dev: true, try: true}
     - bind: {path: /dev/nvidia1,          dev: true, try: true}
+    - bind: {path: /sys/module/nvidia,    try: true}
 
   firefox:
     - A special rule for running the Firefox web browser.

@@ -17,6 +17,14 @@ SANDBOX_CONFIG = f'{SANDBOX_ROOT}/$SANDBOX/config.yml'
 DEFAULT_CONFIG = f'{SANDBOX_ROOT}/global.yml'
 APP_BASE       = 'org.sandbubble'
 
+FLATPAK_INFO   = '''\
+[Application]
+name=%(app_name)s
+
+[Instance]
+instance-id=%(instance_id)s
+'''
+
 
 class SBError(Exception): pass
 
@@ -140,7 +148,7 @@ class Sandbubble:
 
   def add_perms(self, params):
     if isinstance(params, dict) and 'perms' in params:
-      self.cmds_args.extend(('--perms', f'0{int(params['perms'], 0):o}'))
+      self.cmd_args.extend(('--perms', f'0{int(params['perms'], 0):o}'))
 
 
   def action_use(self, params): self.apply_rule(params)
@@ -330,8 +338,16 @@ class Sandbubble:
 
     if self.args.verbose: args.append('--log')
 
+    # Create minimal bwrapinfo.json
+    pid = os.getpid()
+    instance_id = f'sbx-{pid}'
+    bwrapinfo_path = f'{runtime_dir}/.flatpak/{instance_id}/bwrapinfo.json'
+    os.makedirs(os.path.dirname(bwrapinfo_path), exist_ok = True)
+    with open(bwrapinfo_path, 'w') as f: f.write(f'{{"child-pid":{pid}}}')
+
     # Wrap proxy
-    data = f'[Application]\nname={os.environ['APP_NAME']}\n'
+    data = {'app_name': os.environ['APP_NAME'], 'instance_id': instance_id}
+    data = FLATPAK_INFO % data
     fd = fork_and_write(data)
     cmd = ['bwrap', '--new-session', '--symlink', '/usr/lib64', '/lib64',
       '--ro-bind', '/usr/lib', '/usr/lib', '--ro-bind', '/usr/lib64',
