@@ -8,6 +8,8 @@ import yaml
 import shlex
 import shutil
 import re
+import fcntl
+import random
 from functools import reduce
 
 
@@ -56,7 +58,8 @@ class Sandbubble:
     self.loaded           = set()
     self.applied          = []
     self.rules            = {}
-
+    self.id               = f'sbx-{random.randint(int(1e9) + 1, int(1e10))}'
+    self.runtime_dir      = os.environ['XDG_RUNTIME_DIR']
 
   def log(self, s):
     if self.args.verbose: print(s)
@@ -317,8 +320,7 @@ class Sandbubble:
     if not (self.session_bus_args or self.system_bus_args): return
 
     args = []
-    runtime_dir = os.environ['XDG_RUNTIME_DIR']
-    dir  = f'{runtime_dir}/xdg-dbus-proxy'
+    dir  = f'{self.runtime_dir}/xdg-dbus-proxy'
 
     os.makedirs(dir, exist_ok = True)
 
@@ -338,21 +340,14 @@ class Sandbubble:
 
     if self.args.verbose: args.append('--log')
 
-    # Create minimal bwrapinfo.json
-    pid = os.getpid()
-    instance_id = f'sbx-{pid}'
-    bwrapinfo_path = f'{runtime_dir}/.flatpak/{instance_id}/bwrapinfo.json'
-    os.makedirs(os.path.dirname(bwrapinfo_path), exist_ok = True)
-    with open(bwrapinfo_path, 'w') as f: f.write(f'{{"child-pid":{pid}}}')
-
     # Wrap proxy
-    data = {'app_name': os.environ['APP_NAME'], 'instance_id': instance_id}
+    data = {'app_name': os.environ['APP_NAME'], 'instance_id': self.id}
     data = FLATPAK_INFO % data
     fd = fork_and_write(data)
     cmd = ['bwrap', '--new-session', '--symlink', '/usr/lib64', '/lib64',
       '--ro-bind', '/usr/lib', '/usr/lib', '--ro-bind', '/usr/lib64',
       '/usr/lib64', '--ro-bind', '/usr/bin', '/usr/bin', '--clearenv',
-      '--bind', runtime_dir, runtime_dir, '--ro-bind-data', f'{fd}',
+      '--bind', self.runtime_dir, self.runtime_dir, '--ro-bind-data', f'{fd}',
       '/.flatpak-info', '--die-with-parent', '--']
 
     # Start dbus proxy
@@ -390,6 +385,13 @@ class Sandbubble:
     # Apply rules
     self.apply_rule(self.config.get('use', []))
     self.setup_dbus_proxy()
+
+    # Create bwrapinfo.json
+    info_path = f'{self.runtime_dir}/.flatpak/{self.id}/bwrapinfo.json'
+    os.makedirs(os.path.dirname(info_path), exist_ok = True)
+    info_fd = open(info_path, 'w')
+    fcntl.fcntl(info_fd, fcntl.F_SETFD, 0)
+    self.cmd_args += ['--info-fd', f'{info_fd.fileno()}']
 
     # Build command
     cmd = ['bwrap'] + self.cmd_args + exp_command
