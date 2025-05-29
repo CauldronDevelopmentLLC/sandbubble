@@ -22,7 +22,7 @@ rules:
     - symlink: [/usr/lib64, /lib64]
     - bind: /usr/lib
     - bind: /usr/lib64
-    - bind: /usr/libexec
+    - bind: {path: /usr/libexec, try: true}
     - bind: /usr/bin
     - bind: /usr/share
     - bind: /usr/include
