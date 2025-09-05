@@ -7,7 +7,8 @@ rules:
       variables and the file system while still allowing basic programs to
       operate correctly.
 
-    - args: [--clearenv, --unshare-pid, --die-with-parent]
+    - args: [--clearenv, --unshare-pid]
+    - die-with-parent: true
     # More restrictive options to consider.
     # - args: [--unshare-uts, --unshare-ipc, --unshare-user, --unshare-cgroup]
     - proc: /proc
@@ -37,24 +38,47 @@ rules:
     - Bind the user's Downloads directory.
     - bind: {path: $HOME/Downloads, read-write: true}
 
+  make-home:
+    - Create some default directories in home.
+    - dir: $HOME/.config
+    - dir: $HOME/.cache
+    - dir: $HOME/.local/share
+
+  data-home:
+    - Mounts a readable data directory at /sandbox-data
+    - bind:
+        path: $SANDBOX_HOME
+        dst: /sandbox-data
+        try: true
+    - env: {SANDBOX_DATA: /sandbox-data}
+
   private-home:
     - Creates a private writable home directory.
     - bind:
         path: $SANDBOX_HOME
         dst: $HOME
         read-write: true
-        create: skel
-    - dir: $HOME/.config
-    - dir: $HOME/.cache
-    - dir: $HOME/.local/share
+        skel: $HOME
+
+    - use: [make-home]
+
+  tmp-home:
+    - Creates a temporary home directory.
+    - tmp-overlay: {path: $HOME, skel: true}
+    - env: {debian_chroot: $SANDBOX}
+    - use: [make-home]
 
   cli:
     - Enables typical Command Line Interface options.
-    - use: [common, private-home, cwd]
+    - use: [common, data-home, cwd]
 
   gui:
     - Enables typical Graphical User Interface options.
-    - use: [common, private-home, x11, wayland, audio, dbus, accessibility]
+    - use: [common, x11, wayland, audio, dbus, accessibility]
+
+  shell:
+    - Options for a temporary shell with typical CLI and GUI options.
+    - use: [gui, tmp-home, cwd]
 
   cwd:
     - Bind the current directory with write permission.

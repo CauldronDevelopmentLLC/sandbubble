@@ -218,7 +218,7 @@ Example:
 ```yaml
 rules:
   common:
-    - args: [--clearenv, --unshare-pid, --die-with-parent]
+    - args: [--clearenv, --unshare-pid]
 ```
 
 ### Action: ``bind: {...}``
@@ -285,21 +285,19 @@ Parameters are:
 - ``path: <string>``
   A dbus path.  See ``man xdg-dbus-proxy``.
 
-### Action: ``del-arg: [<pattern>...]``
-Delete an argument previously added to ``bwrap`` by another rule.  If a
-series of arguments match all of the provided patterns then those arguments
-will be removed from the ``bwrap`` command line.  Patterns may be regular
-expressions.
+### Action: ``dev: <path> | {path: <path>, perms: <perms>}``
+Create a dev file system at the specified path.  See ``tmpfs``.
+
+### Action: ``die-with-parent: <bool>``
+Enable or disable ``die-with-parent`` flag.  Causes the sandbox process to
+die if the parent process dies.  See ``bwrap`` man page for more details.
 
 Example:
 ```yaml
 rules:
   example:
-    - del-arg: [--die-with-parent]
+    - die-with-parent: true
 ```
-
-### Action: ``dev: <path> | {path: <path>, perms: <perms>}``
-Create a dev file system at the specified path.  See ``tmpfs``.
 
 ### Action: ``dir: <path> | {path: <path>, perms: <perms>}``
 Create a directory inside the sandbox.

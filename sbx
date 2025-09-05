@@ -49,6 +49,25 @@ def fork_and_write(data):
   return pr
 
 
+def copytree(src, dst):
+  src = os.path.realpath(src)
+
+  for root, dirs, files in os.walk(src):
+    target = os.path.join(dst, root[len(src):])
+
+    for dir in dirs:
+      tgtPath = os.path.join(target, dir)
+      if not os.path.exists(tgtPath):
+        os.makedirs(tgtPath)
+        shutil.copystat(os.path.join(root, dir), tgtPath)
+
+    for file in files:
+      tgtPath = os.path.join(target, file)
+      if not os.path.exists(tgtPath):
+        print('{} -> {}'.format(os.path.join(root, file), tgtPath))
+        shutil.copy2(os.path.join(root, file), tgtPath)
+
+
 class Sandbubble:
   def __init__(self, args):
     self.args             = args
@@ -60,6 +79,8 @@ class Sandbubble:
     self.rules            = {}
     self.id               = f'sbx-{random.randint(int(1e9) + 1, int(1e10))}'
     self.runtime_dir      = os.environ['XDG_RUNTIME_DIR']
+    self.tempdirs         = set()
+    self.die_with_parent  = False
 
   def log(self, s):
     if self.args.verbose: print(s)
@@ -161,23 +182,11 @@ class Sandbubble:
     self.cmd_args.extend((self.expand(a) for a in params))
 
 
-  def action_del_arg(self, params):
-    if not isinstance(params, list) or not len(params):
-      raise SBError('"del-arg" requires non-empty list')
+  def action_die_with_parent(self, params):
+    if not isinstance(params, bool):
+      raise SBError('"die-with-parent" requires bool')
 
-    params = [re.compile(s) for s in params]
-
-    i = 0
-    while i < len(self.cmd_args) - len(params):
-      match = True
-      for j in range(len(params)):
-        if not params[j].fullmatch(self.cmd_args[i + j]):
-          match = False
-          break
-
-      if match:
-        self.cmd_args = self.cmd_args[:i] + self.cmd_args[i + len(params):]
-      else: i += 1
+    self.die_with_parent = params
 
 
   def action_env(self, params):
@@ -193,6 +202,36 @@ class Sandbubble:
           self.cmd_args.extend(('--setenv', k, os.environ[k]))
 
 
+  def create_skel(self, path):
+    bashrc = path + '/.bashrc'
+    new_bashrc = not os.path.exists(bashrc)
+
+    copytree('/etc/skel', path)
+
+    if new_bashrc and os.path.exists(bashrc):
+      with open(bashrc, 'a') as f:
+        f.write(f'\nPS1="({self.args.name}) $PS1"\n')
+
+
+  def action_skel(self, params):
+    if isinstance(params, str): params = {'path': params}
+    self.create_skel(self.expand(params['path']))
+
+
+  def action_tmp_overlay(self, params):
+    if isinstance(params, str): params = {'path': params}
+
+    path = self.expand(params['path'])
+
+    if params.get('skel', False):
+      tempdir = tempfile.mkdtemp()
+      self.tempdirs.add(tempdir)
+      shutil.copytree('/etc/skel', tempdir, dirs_exist_ok = True)
+      self.cmd_args.extend(('--overlay-src', tempdir))
+
+    self.cmd_args.extend((f'--tmp-overlay', path))
+
+
   def action_bind(self, params):
     if isinstance(params, str): params = {'path': params}
 
@@ -204,15 +243,7 @@ class Sandbubble:
     create = params.get('create', False)
     if create and not os.path.exists(src):
       os.makedirs(src)
-
-      if create == 'skel':
-        from distutils.dir_util import copy_tree
-        copy_tree('/etc/skel', src)
-
-        bashrc = src + '/.bashrc'
-        if os.path.exists(src):
-          with open(bashrc, 'a') as f:
-            f.write(f'\nPS1="({self.args.name}) $PS1"\n')
+      if create == 'skel': self.create_skel(src)
 
     if params.get('dev', False): type = 'dev-bind'
     else: type = 'bind' if params.get('read-write', False) else 'ro-bind'
@@ -386,6 +417,9 @@ class Sandbubble:
     self.apply_rule(self.config.get('use', []))
     self.setup_dbus_proxy()
 
+    # Die with parent
+    if self.die_with_parent: self.cmd_args.append('--die-with-parent')
+
     # Create bwrapinfo.json
     info_path = f'{self.runtime_dir}/.flatpak/{self.id}/bwrapinfo.json'
     os.makedirs(os.path.dirname(info_path), exist_ok = True)
@@ -398,7 +432,13 @@ class Sandbubble:
     self.log('@' + shlex.join(cmd))
 
     # Execute
-    os.execvp(cmd[0], cmd)
+    child = os.fork()
+    if child == 0: os.execvp(cmd[0], cmd)
+    os.waitpid(child, 0)
+
+    # Cleanup temp dirs
+    for path in self.tempdirs:
+      shutil.rmtree(path)
 
 
   def create(self, reconfig = False):
@@ -437,11 +477,14 @@ class Sandbubble:
 
   def list(self):
     root = self.expand_path(SANDBOX_ROOT)
+    names = []
 
     for name in os.listdir(root):
       path = f'{root}/{name}'
       if os.path.isdir(path) and os.path.exists(f'{path}/config.yml'):
-        print(name)
+        names.append(name)
+
+    for name in sorted(names): print(name)
 
 
   def list_rules(self):

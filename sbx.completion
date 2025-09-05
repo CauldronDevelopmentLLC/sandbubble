@@ -1,0 +1,17 @@
+_sbx_completions() {
+  local cur prev CMDS SBCMDS
+  cur="${COMP_WORDS[COMP_CWORD]}"
+  prev="${COMP_WORDS[COMP_CWORD-1]}"
+
+  CMDS="create reconfig run list list-rules delete show edit help"
+  SBCMDS="reconfig run delete show edit"
+
+  if [[ " ${SBCMDS} " =~ .*\ ${prev}\ .* ]]; then
+    COMPREPLY=( $(compgen -W "$(sbx list)" -- ${cur}) )
+
+  elif [ $COMP_CWORD -eq 1 ]; then
+    COMPREPLY=( $(compgen -W "$CMDS" -- ${cur}) )
+  fi
+}
+
+complete -F _sbx_completions sbx
