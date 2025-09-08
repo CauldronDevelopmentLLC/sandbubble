@@ -29,7 +29,7 @@ rules:
     - bind: /usr/include
     - symlink: [usr/bin, /bin]
     - symlink: [usr/bin, /sbin]
-    - tmpfs: $XDG_RUNTIME_DIR
+    - tmpfs: {path: $XDG_RUNTIME_DIR, perms: 0o700}
     - file: $XDG_RUNTIME_DIR/flatpak-info
     - file: /.flatpak-info
     - bind: {path: /run/systemd/resolve, try: true}
