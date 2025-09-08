@@ -90,6 +90,10 @@ rules:
       - DISPLAY
       - env: DISPLAY
       - bind: /tmp/.X11-unix/
+    - ifdef:
+      - XAUTHORITY
+      - env: XAUTHORITY
+      - bind: $XAUTHORITY
 
   wayland:
     - Allow access to Wayland.
