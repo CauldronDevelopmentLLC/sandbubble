@@ -296,8 +296,13 @@ class Sandbubble:
   def action_restrict_tty(self, params):
     # --new-session breaks interactive sessions, this is an alternative way of
     # fixing CVE-2017-5226
-    import seccomp
+
+    try:
+      import seccomp
+    except ImportError:
+      import pyseccomp as seccomp
     import termios
+
     f = seccomp.SyscallFilter(defaction = seccomp.ALLOW)
     f.add_rule(seccomp.KILL_PROCESS, 'ioctl',
                seccomp.Arg(1, seccomp.MASKED_EQ, 0xffffffff, termios.TIOCSTI))
