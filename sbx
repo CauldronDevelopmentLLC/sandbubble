@@ -13,8 +13,11 @@ import random
 from functools import reduce
 
 
-SANDBOX_ROOT   = '$HOME/.config/sandbubble'
-SANDBOX_HOME   = '$HOME/.local/share/sandbubble/$SANDBOX'
+XDG_CONFIG_HOME = os.environ.get('XDG_CONFIG_HOME', '$HOME/.config')
+XDG_DATA_HOME   = os.environ.get('XDG_DATA_HOME', '$HOME/.local/share')
+
+SANDBOX_ROOT   = f'{XDG_CONFIG_HOME}/sandbubble'
+SANDBOX_HOME   = f'{XDG_DATA_HOME}/sandbubble/$SANDBOX'
 SANDBOX_CONFIG = f'{SANDBOX_ROOT}/$SANDBOX/config.yml'
 DEFAULT_CONFIG = f'{SANDBOX_ROOT}/global.yml'
 APP_BASE       = 'org.sandbubble'
