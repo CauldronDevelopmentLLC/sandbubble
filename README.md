@@ -137,7 +137,7 @@ rules:
         create: skel
     - dir: $HOME/.config
     - dir: $HOME/.cache
-    - dir: $HOME.local/share
+    - dir: $HOME/.local/share
 ```
 
 The above rule creates a private home directory with several subdirectories.
