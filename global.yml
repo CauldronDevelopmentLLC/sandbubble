@@ -152,6 +152,12 @@ rules:
     - bind: /sys/dev/char
     - bind: /sys/devices
 
+  usb:
+    - Enables USB access.
+    - bind: {path: /dev/usb}
+    - bind: {path: /dev/bus/usb}
+    - bind: {path: /sys/bus/usb/devices}
+
   nvidia:
     - Enables access to NVidia GPU device.
     - bind: {path: /dev/nvidiactl,        dev: true}
