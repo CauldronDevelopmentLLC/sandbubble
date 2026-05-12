@@ -381,8 +381,9 @@ class Sandbubble:
     cmd = ['bwrap', '--new-session', '--symlink', '/usr/lib64', '/lib64',
       '--ro-bind', '/usr/lib', '/usr/lib', '--ro-bind', '/usr/lib64',
       '/usr/lib64', '--ro-bind', '/usr/bin', '/usr/bin', '--clearenv',
-      '--bind', self.runtime_dir, self.runtime_dir, '--ro-bind-data', f'{fd}',
-      '/.flatpak-info', '--die-with-parent', '--']
+      '--bind', self.runtime_dir, self.runtime_dir,
+      '--ro-bind-data', f'{fd}', '/.flatpak-info',
+      '--die-with-parent', '--']
 
     # Start dbus proxy
     pr, pw = os.pipe2(0)
