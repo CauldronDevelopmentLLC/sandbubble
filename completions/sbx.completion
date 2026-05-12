@@ -1,10 +1,24 @@
 _sbx_completions() {
-  local cur prev CMDS SBCMDS
+  local cur prev CMDS SBCMDS TPLDIR
   cur="${COMP_WORDS[COMP_CWORD]}"
   prev="${COMP_WORDS[COMP_CWORD-1]}"
 
-  CMDS="create reconfig run list list-rules delete show edit help"
-  SBCMDS="reconfig run delete show edit"
+  CMDS="create reconfig run list list-rules delete show edit template help"
+  SBCMDS="reconfig run delete show edit template"
+  TPLDIR="${XDG_DATA_HOME:-$HOME/.local/share}/sbx-templates"
+
+  case "$prev" in
+    -t|--template)
+      local tpls=""
+      [ -d "$TPLDIR" ] && tpls="$(ls "$TPLDIR" 2>/dev/null)"
+      COMPREPLY=( $(compgen -W "$tpls" -- ${cur}) )
+      return
+      ;;
+    -c|--config)
+      COMPREPLY=( $(compgen -f -- ${cur}) )
+      return
+      ;;
+  esac
 
   if [[ " ${SBCMDS} " =~ .*\ ${prev}\ .* ]]; then
     COMPREPLY=( $(compgen -W "$(sbx list)" -- ${cur}) )

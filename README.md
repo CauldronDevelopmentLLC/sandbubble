@@ -1,4 +1,4 @@
-# Sandbubble
+# sbx
 
 A tool for easily sandboxing applications in Linux.
 
@@ -11,10 +11,10 @@ be acceptable for the packages provided by your operating system.  Presumably
 these have been vetted.  However, if you run tools like ``npm``,
 ``pip`` or ``vscode`` which pull arbitrary code from hundreds of different
 sources and run them with full access to all your personal files, that's
-another story.  Sandbubble aims to solve this problem by making it easier to
+another story.  sbx aims to solve this problem by making it easier to
 sandbox applications and give them only the access they require to operate.
 
-Sandbubble uses [bubblewrap](https://github.com/containers/bubblewrap)
+sbx uses [bubblewrap](https://github.com/containers/bubblewrap)
 and [xdg-dbus-proxy](https://github.com/flatpak/xdg-dbus-proxy) to sandbox
 applications in Linux.  Based on
 [code by Simon Lipp](https://gist.github.com/sloonz/4b7f5f575a96b6fe338534dbc2480a5d).  See
@@ -30,8 +30,8 @@ First install the required packages.  On Debian run:
 Then, following manual install is recommended:
 
 ```sh
-mkdir -p ~/.config/sandbubble
-cp global.yml ~/.config/sandbubble
+mkdir -p ~/.config/sbx
+cp global.yml ~/.config/sbx
 mkdir -p ~/.local/bin
 cp sbx ~/.local/bin
 ```
@@ -49,6 +49,15 @@ Create a new sandbox:
 
     sbx create <name> <executable> <args>...
 
+To create a sandbox from a template:
+
+    sbx create <name> -t <template> <executable> <args>...
+
+Templates live in ``~/.local/share/sbx-templates/<template>/`` and consist
+of a ``config.yml`` and an optional ``home/`` directory whose contents are
+copied into the new sandbox's home.  See ``sbx template`` below for creating
+templates from existing sandboxes.
+
 You can edit the sandbox config with:
 
     sbx edit <name>
@@ -59,6 +68,15 @@ correctly.
 Finally, run your sandbox:
 
     sbx run <name> <args>...
+
+To save an existing sandbox as a reusable template:
+
+    sbx template <name> <template-name>
+
+This copies the sandbox's config and home directory to
+``~/.local/share/sbx-templates/<template-name>/``.  Use ``-f`` to overwrite
+an existing template.  The template can then be used with
+``sbx create <new-name> -t <template-name>``.
 
 # Example (sandboxing npm)
 
@@ -79,8 +97,7 @@ and not to ``sbx`` then you will need to add ``--`` like this:
     sbx run npm -- --help
 
 # Command line
-Sandbubble's executable is called ``sbx``.  It takes one of the following
-subcommands:
+``sbx`` takes one of the following subcommands:
 
     create       create a new sandbox
     reconfig     reconfigure an existing sandbox
@@ -90,6 +107,7 @@ subcommands:
     delete       delete an existing sandbox
     show         print sandbox config and exit
     edit         edit sandbox config
+    template     create a template from an existing sandbox
     help         show this help message and exit
 
 To see the help for a subcommand run:
@@ -98,7 +116,7 @@ To see the help for a subcommand run:
 
 # Configuration
 
-Sandbubble uses a [YAML](https://yaml.org/) configuration file.  A config
+sbx uses a [YAML](https://yaml.org/) configuration file.  A config
 consists of a top-level dictionary containing up to 4 keys, as follows:
 
 - ``use``     - A list of rules to use by default.
@@ -111,7 +129,7 @@ For example:
 ```yaml
 use: [gui, gpu]
 command: [java, -jar, Mindustry.jar]
-imports: [$HOME/.config/sandbubble/global.yml]
+imports: [$HOME/.config/sbx/global.yml]
 ```
 
 The above is a complete config for a sandbox that runs the game
@@ -144,12 +162,12 @@ The above rule creates a private home directory with several subdirectories.
 
 You may also use ``~`` instead of ``$HOME``.
 
-A few environment variables are defined by Sandbubble itself these are:
+A few environment variables are defined by sbx itself these are:
 
 - ``SANDBOX``        - The name of the current sandbox.
 - ``SANDBOX_HOME``   - A home directory for the sandbox.
 - ``SANDBOX_CONFIG`` - The path to the sandbox's config file.
-- ``SANDBOX_ROOT``   - Sandbubble's root config directory.
+- ``SANDBOX_ROOT``   - sbx's root config directory.
 
 Note, these variables may be used in configs but are not automatically passed
 to the sandboxed process.
@@ -171,7 +189,7 @@ use: [gui, gpu, downloads]
 When ``command`` is specified at the top level of a sandbox config it
 specifies the command to run in the sandbox and its arguments.
 
-When ``command`` is specified in Sandbubble's global config file it specifies
+When ``command`` is specified in sbx's global config file it specifies
 the default command and arguments to apply to new sandboxes.
 
 ## Key: ``imports: [<path>...]``

@@ -16,11 +16,12 @@ from functools import reduce
 XDG_CONFIG_HOME = os.environ.get('XDG_CONFIG_HOME', '$HOME/.config')
 XDG_DATA_HOME   = os.environ.get('XDG_DATA_HOME', '$HOME/.local/share')
 
-SANDBOX_ROOT   = f'{XDG_CONFIG_HOME}/sandbubble'
-SANDBOX_HOME   = f'{XDG_DATA_HOME}/sandbubble/$SANDBOX'
-SANDBOX_CONFIG = f'{SANDBOX_ROOT}/$SANDBOX/config.yml'
-DEFAULT_CONFIG = f'{SANDBOX_ROOT}/global.yml'
-APP_BASE       = 'org.sandbubble'
+SANDBOX_ROOT      = f'{XDG_CONFIG_HOME}/sbx'
+SANDBOX_HOME      = f'{XDG_DATA_HOME}/sbx/$SANDBOX'
+SANDBOX_CONFIG    = f'{SANDBOX_ROOT}/$SANDBOX/config.yml'
+SANDBOX_TEMPLATES = f'{XDG_DATA_HOME}/sbx-templates'
+DEFAULT_CONFIG    = f'{SANDBOX_ROOT}/global.yml'
+APP_BASE       = 'org.sbx'
 
 FLATPAK_INFO   = '''\
 [Application]
@@ -71,7 +72,7 @@ def copytree(src, dst):
         shutil.copy2(os.path.join(root, file), tgtPath)
 
 
-class Sandbubble:
+class SBX:
   def __init__(self, args):
     self.args             = args
     self.cmd_args         = []
@@ -431,8 +432,8 @@ class Sandbubble:
     fcntl.fcntl(info_fd, fcntl.F_SETFD, 0)
     self.cmd_args += ['--info-fd', f'{info_fd.fileno()}']
 
-    # Build command
-    cmd = ['bwrap'] + self.cmd_args + exp_command
+    # Build command (wrap in login shell so ~/.profile is sourced)
+    cmd = ['bwrap'] + self.cmd_args + ['bash', '-lc', shlex.join(exp_command)]
     self.log('@' + shlex.join(cmd))
 
     # Execute
@@ -452,8 +453,21 @@ class Sandbubble:
     elif os.path.exists(sandbox_config):
       raise SBError(f'Sandbox "{self.args.name}" already exists')
 
-    # Load default config
-    config = self.args.config if self.args.config else DEFAULT_CONFIG
+    # Template and --config are mutually exclusive
+    if self.args.template and self.args.config:
+      raise SBError('--template and --config are mutually exclusive')
+
+    # Resolve template
+    template_dir = None
+    if self.args.template:
+      template_dir = self.expand_path(
+        f'{SANDBOX_TEMPLATES}/{self.args.template}')
+      if not os.path.isdir(template_dir):
+        raise SBError(f'Template "{self.args.template}" not found')
+
+    # Load default config (template config behaves like --config: copy rules)
+    if template_dir: config = f'{template_dir}/config.yml'
+    else: config = self.args.config if self.args.config else DEFAULT_CONFIG
     self.load_config(config)
 
     # Create sandbox config
@@ -462,7 +476,7 @@ class Sandbubble:
     config_data = dict(use = rules, command = command)
 
     # Copy or import rules
-    if self.args.config: config_data['rules'] = self.rules
+    if self.args.config or template_dir: config_data['rules'] = self.rules
     else: config_data['imports'] = [config]
 
     # Create directory
@@ -474,6 +488,17 @@ class Sandbubble:
       yaml.dump(
         config_data, f, Dumper = Dumper, width = 80, sort_keys = False,
         default_flow_style = False)
+
+    # Seed home from template (eager, create-only, not reconfig)
+    if template_dir and not reconfig:
+      template_home = f'{template_dir}/home'
+      if os.path.isdir(template_home):
+        sandbox_home = self.expand_path(SANDBOX_HOME)
+        if os.path.exists(sandbox_home):
+          raise SBError(
+            f'Sandbox home "{sandbox_home}" already exists; refusing to ' +
+            'seed from template')
+        shutil.copytree(template_home, sandbox_home)
 
 
   def reconfig(self): self.create(True)
@@ -540,6 +565,25 @@ class Sandbubble:
       sys.stdout.write(f.read())
 
 
+  def template(self):
+    config = self.require_config()
+    target = self.expand_path(
+      f'{SANDBOX_TEMPLATES}/{self.args.template_name}')
+
+    if os.path.exists(target):
+      if not self.args.force:
+        raise SBError(
+          f'Template "{self.args.template_name}" already exists; use ' +
+          '--force to overwrite')
+      shutil.rmtree(target)
+
+    os.makedirs(target)
+    shutil.copy2(config, f'{target}/config.yml')
+
+    home = self.expand_path(SANDBOX_HOME)
+    if os.path.isdir(home): shutil.copytree(home, f'{target}/home')
+
+
   def edit(self):
     if not 'EDITOR' in os.environ: editor = 'vi'
     else: editor = os.environ['EDITOR']
@@ -565,7 +609,7 @@ class Sandbubble:
 
 # Arguments
 desc = '''\
-Sandbubble is a tool for creating sandboxes in user space.\
+sbx is a tool for creating sandboxes in user space.\
 '''
 
 parser = argparse.ArgumentParser(description = desc)
@@ -577,6 +621,9 @@ create_parser = subs.add_parser('create', help = 'create a new sandbox')
 create_parser.add_argument(
   '--config', '-c', help = 'override the default config file and copy the ' +
   'rules to the new sandbox rather than import them')
+create_parser.add_argument(
+  '--template', '-t', help = 'create the sandbox from a template in ' +
+  f'{SANDBOX_TEMPLATES}; mutually exclusive with --config')
 create_parser.add_argument(
   '--rule', '-r', action = 'append', help = 'rule or rules to apply ' +
   'instead of the default rules')
@@ -615,6 +662,14 @@ edit_parser = subs.add_parser(
   'edit',help = 'edit sandbox config')
 edit_parser.add_argument('name', help = 'name of the sandbox')
 
+tpl_parser = subs.add_parser(
+  'template', help = 'create a template from an existing sandbox')
+tpl_parser.add_argument('name', help = 'name of the source sandbox')
+tpl_parser.add_argument('template_name', help = 'name of the new template')
+tpl_parser.add_argument(
+  '--force', '-f', action = 'store_true',
+  help = 'overwrite the template if it already exists')
+
 subs.add_parser('help', help = 'show this help message and exit')
 
 args = parser.parse_args()
@@ -624,7 +679,7 @@ if args.cmd is None or args.cmd == 'help':
   sys.exit(1)
 
 try:
-  Sandbubble(args).exec()
+  SBX(args).exec()
 
 except SBError as e:
   print(f'ERROR: {str(e)}.', file = sys.stderr)
