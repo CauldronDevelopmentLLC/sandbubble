@@ -67,7 +67,7 @@ def copytree(src, dst):
     for file in files:
       tgtPath = os.path.join(target, file)
       if not os.path.exists(tgtPath):
-        print('{} -> {}'.format(os.path.join(root, file), tgtPath))
+        #print('{} -> {}'.format(os.path.join(root, file), tgtPath))
         shutil.copy2(os.path.join(root, file), tgtPath)
 
 
@@ -206,14 +206,9 @@ class Sandbubble:
 
 
   def create_skel(self, path):
-    bashrc = path + '/.bashrc'
-    new_bashrc = not os.path.exists(bashrc)
-
     copytree('/etc/skel', path)
-
-    if new_bashrc and os.path.exists(bashrc):
-      with open(bashrc, 'a') as f:
-        f.write(f'\nPS1="({self.args.name}) $PS1"\n')
+    with open(path + '/.bashrc', 'a') as f:
+      f.write(f'\nPS1="({self.args.name}) $PS1"\n')
 
 
   def action_skel(self, params):
@@ -545,10 +540,9 @@ class Sandbubble:
 
 
   def edit(self):
-    if not 'EDITOR' in os.environ:
-      raise SBError('"EDITOR" environment variable is not set')
+    if not 'EDITOR' in os.environ: editor = 'vi'
+    else: editor = os.environ['EDITOR']
 
-    editor = os.environ['EDITOR']
     if not shutil.which(editor):
       raise SBError('"EDITOR" environment variable set to invalid command')
 
