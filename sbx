@@ -498,7 +498,7 @@ class SBX:
           raise SBError(
             f'Sandbox home "{sandbox_home}" already exists; refusing to ' +
             'seed from template')
-        shutil.copytree(template_home, sandbox_home)
+        shutil.copytree(template_home, sandbox_home, symlinks = True)
 
 
   def reconfig(self): self.create(True)
@@ -581,7 +581,8 @@ class SBX:
     shutil.copy2(config, f'{target}/config.yml')
 
     home = self.expand_path(SANDBOX_HOME)
-    if os.path.isdir(home): shutil.copytree(home, f'{target}/home')
+    if os.path.isdir(home):
+      shutil.copytree(home, f'{target}/home', symlinks = True)
 
 
   def edit(self):
